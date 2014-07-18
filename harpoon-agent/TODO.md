@@ -1,0 +1,26 @@
+- volumes
+- file descriptor limits:
+  - express as resource like mem/cpu?
+  - default to something sane (bazooka: 131072)
+  - libcontainer isn't aware of this, so harpoon-container needs to know to call `syscall.Setrlimit` with the appropriate values.
+- collaborate with syseng on kernel upgrade:
+  - currently built from https://github.com/soundcloud/sc-linux-kernel/tree/config-3.12-backport
+- logging
+  - expose logs over API
+  - decide if svlogd+udp to agent makes sense for exposing logs in the API;
+    alternative could be adapting bazooka-log code
+- state
+  - agent will not presently recover its internal state on restart
+  - some things it needs to recover:
+    - next port (can steal this from bazooka, maybe docker)
+    - running containers (walk /run/harpoon/$containerid)
+    - container configurations (not stored on disk)
+- API
+  - /containers
+  - event stream
+  - non-happy path
+  - review heartbeat interactions
+  - have a way to sync agent.ContainerInstance.Status regularly
+- docs
+- tests
+- refactoring
