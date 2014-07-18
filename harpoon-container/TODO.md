@@ -1,0 +1,11 @@
+- fork libcontainer to soundcloud, merging useful (pending) PRs
+  - https://github.com/docker/libcontainer/pull/22
+  - https://github.com/docker/libcontainer/pull/16
+  - https://github.com/docker/libcontainer/pull/9
+- set OOMed to true when container exits after OOM
+- kill container if we receive an OOM but it doesn't exit quickly
+- refactor Container.start()
+- set CpuTime in metrics (wasn't previously available)
+- document
+- test
+- define types for states in heartbeat protocol
