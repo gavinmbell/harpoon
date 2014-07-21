@@ -28,7 +28,7 @@ func kill(cmd *exec.Cmd) {
 // commandBuilder builds the command for namespaces.Exec and stores it in the
 // pointer cmd.
 func commandBuilder(cmd **exec.Cmd) namespaces.CreateCommand {
-	return func(container *libcontainer.Container, _, _, _, init string, childPipe *os.File, args []string) *exec.Cmd {
+	return func(container *libcontainer.Config, _, _, _, init string, childPipe *os.File, args []string) *exec.Cmd {
 		command := exec.Command(init, args...)
 		command.ExtraFiles = []*os.File{childPipe}
 
@@ -42,7 +42,7 @@ func commandBuilder(cmd **exec.Cmd) namespaces.CreateCommand {
 
 type Container struct {
 	err       error
-	container *libcontainer.Container
+	container *libcontainer.Config
 }
 
 // Start starts the container and keeps it running. The container status is
@@ -79,7 +79,7 @@ func (c *Container) start(statusc chan agent.ContainerProcessStatus, transition 
 	for {
 		var (
 			err     error
-			oom     chan struct{}
+			oom     <-chan struct{}
 			started = make(chan struct{})
 			exited  = make(chan error, 1)
 			restart <-chan time.Time
@@ -93,12 +93,13 @@ func (c *Container) start(statusc chan agent.ContainerProcessStatus, transition 
 			started <- struct{}{}
 		}
 
-		term := namespaces.NewTerminal(os.Stdin, os.Stdout, os.Stderr, false)
-
 		go func() {
 			_, err := namespaces.Exec(
 				c.container,
-				term,
+				os.Stdin,
+				os.Stdout,
+				os.Stderr,
+				"",     // no console
 				"", "", // rootfs and datapath handled elsewhere
 				os.Args[1:],
 				commandBuilder(&cmd),
@@ -199,5 +200,5 @@ func (c *Container) updateMetrics(metrics *agent.ContainerMetrics) {
 
 	metrics.MemoryUsage = stats.MemoryStats.Usage
 	metrics.MemoryLimit = stats.MemoryStats.Stats["hierarchical_memory_limit"]
-	// metrics.CpuTime = stats.CpuUsage.CurrentUsage ; this is different
+	metrics.CPUTime = stats.CpuStats.CpuUsage.TotalUsage
 }

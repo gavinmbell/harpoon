@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/namespaces"
+	"github.com/docker/libcontainer/syncpipe"
 )
 
 func Init() error {
@@ -21,13 +22,13 @@ func Init() error {
 		log.Fatal("open ./container.json:", err)
 	}
 
-	var container *libcontainer.Container
+	var container *libcontainer.Config
 
 	if err := json.NewDecoder(f).Decode(&container); err != nil {
 		log.Fatal("load ./container.json:", err)
 	}
 
-	syncPipe, err := namespaces.NewSyncPipeFromFd(0, uintptr(3))
+	syncPipe, err := syncpipe.NewSyncPipeFromFd(0, uintptr(3))
 	if err != nil {
 		return fmt.Errorf("unable to create sync pipe: %s", err)
 	}
