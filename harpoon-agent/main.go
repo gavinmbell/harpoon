@@ -14,6 +14,9 @@ var (
 	addr              = flag.String("addr", ":3333", "address to listen on")
 	configuredVolumes = volumes{}
 
+	agentTotalMem int64
+	agentTotalCPU int64
+
 	hostname string
 )
 
@@ -28,8 +31,23 @@ func init() {
 func main() {
 	go receiveLogs()
 
+	flag.Int64Var(&agentTotalCPU, "cpu", -1, "available cpu resources (-1 to use all cpus)")
+	flag.Int64Var(&agentTotalMem, "mem", -1, "available memory resources in MB (-1 to use all)")
 	flag.Var(&configuredVolumes, "v", "repeatable list of available volumes")
 	flag.Parse()
+
+	if agentTotalCPU == -1 {
+		agentTotalCPU = systemCPUs()
+	}
+
+	if agentTotalMem == -1 {
+		mem, err := systemMemoryMB()
+		if err != nil {
+			log.Fatal("unable to get available memory: ", err)
+		}
+
+		agentTotalMem = mem
+	}
 
 	var (
 		r   = newRegistry()

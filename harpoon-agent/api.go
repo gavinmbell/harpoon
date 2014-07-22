@@ -37,6 +37,8 @@ func newAPI(r *registry) *api {
 	mux.Post("/containers/:id/start", http.HandlerFunc(api.handleStart))
 	mux.Post("/containers/:id/stop", http.HandlerFunc(api.handleStop))
 
+	mux.Get("/resources", http.HandlerFunc(api.handleResources))
+
 	return api
 }
 
@@ -187,5 +189,25 @@ func (a *api) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(&agent.HeartbeatReply{
 		Want: want,
+	})
+}
+
+func (a *api) handleResources(w http.ResponseWriter, r *http.Request) {
+	volumes := make([]string, 0, len(configuredVolumes))
+
+	for vol := range configuredVolumes {
+		volumes = append(volumes, vol)
+	}
+
+	json.NewEncoder(w).Encode(&agent.HostResources{
+		Memory: agent.TotalReserved{
+			Total:    float64(agentTotalMem),
+			Reserved: 0, // TODO: enumerate created containers
+		},
+		CPUs: agent.TotalReserved{
+			Total:    float64(agentTotalCPU),
+			Reserved: 0, // TODO: enumerate created containers
+		},
+		Volumes: volumes,
 	})
 }
