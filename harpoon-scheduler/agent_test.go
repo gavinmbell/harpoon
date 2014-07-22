@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/soundcloud/harpoon/harpoon-agent/lib"
-
 	"github.com/julienschmidt/httprouter"
+
+	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
 
 func TestMockAgent(t *testing.T) {
@@ -204,7 +204,6 @@ func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httpr
 		ID:     id,
 		Status: agent.ContainerStatusRunning,
 		Config: config,
-		Ports:  config.Ports, // TODO(pb): why is this duplicated outside of the config?
 	}
 	func() {
 		c.Lock()

@@ -11,10 +11,10 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/soundcloud/harpoon/harpoon-scheduler/lib"
-
 	"github.com/julienschmidt/httprouter"
 	"github.com/streadway/handy/report"
+
+	"github.com/soundcloud/harpoon/harpoon-scheduler/lib"
 )
 
 func main() {
