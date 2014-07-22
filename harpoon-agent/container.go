@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
@@ -26,13 +25,19 @@ import (
 )
 
 type container struct {
-	config *libcontainer.Config
+	agent.ContainerInstance
 
+	config       *libcontainer.Config
 	desired      string
 	downDeadline time.Time
 
-	agent.ContainerInstance
-	sync.RWMutex
+	subscribers map[chan<- agent.ContainerInstance]struct{}
+
+	actionRequestc chan actionRequest
+	hbRequestc     chan heartbeatRequest
+	subc           chan chan<- agent.ContainerInstance
+	unsubc         chan chan<- agent.ContainerInstance
+	quitc          chan struct{}
 }
 
 func newContainer(id string, config agent.ContainerConfig) *container {
@@ -42,168 +47,117 @@ func newContainer(id string, config agent.ContainerConfig) *container {
 			Status: agent.ContainerStatusStarting,
 			Config: config,
 		},
+		subscribers:    map[chan<- agent.ContainerInstance]struct{}{},
+		actionRequestc: make(chan actionRequest),
+		hbRequestc:     make(chan heartbeatRequest),
+		subc:           make(chan chan<- agent.ContainerInstance),
+		unsubc:         make(chan chan<- agent.ContainerInstance),
+		quitc:          make(chan struct{}),
 	}
 
 	c.buildContainerConfig()
 
+	go c.loop()
+
 	return c
 }
 
-func (c *container) heartbeat(hb agent.Heartbeat) string {
-	c.RLock()
-	defer c.RUnlock()
-
-	type state struct{ want, is string }
-
-	switch (state{c.desired, hb.Status}) {
-	case state{"UP", "UP"}:
-		return "UP"
-	case state{"UP", "EXITING"}:
-		c.Status = agent.ContainerStatusFinished
-		return "EXIT"
-
-	case state{"DOWN", "UP"}:
-		if time.Now().After(c.downDeadline) {
-			return "EXIT"
-		}
-
-		return "DOWN"
-	case state{"DOWN", "EXITING"}:
-		c.Status = agent.ContainerStatusFinished
-		return "EXIT"
-
-	case state{"EXIT", "UP"}:
-		return "EXIT"
-	case state{"EXIT", "EXITING"}:
-		c.Status = agent.ContainerStatusFinished
-		return "EXIT"
+func (c *container) Create() error {
+	req := actionRequest{
+		action: containerCreate,
+		res:    make(chan error),
 	}
-
-	return "UNKNOWN"
-}
-
-func (c *container) Start() error {
-	// TODO: validate that container is stopped
-
-	var (
-		rundir = path.Join("/run/harpoon", c.ID)
-		logdir = filepath.Join("/srv/harpoon/log/", c.ID)
-	)
-
-	logPipe, err := startLogger(c.ID, logdir)
-	if err != nil {
-		return err
-	}
-
-	// ensure we don't hold on to the logger
-	defer logPipe.Close()
-
-	cmd := exec.Command(
-		"harpoon-container",
-		c.Config.Command.Exec...,
-	)
-
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, fmt.Sprintf(
-		"heartbeat_url=http://%s/containers/%s/heartbeat",
-		*addr,
-		c.ID,
-	))
-
-	cmd.Stdout = logPipe
-	cmd.Stderr = logPipe
-	cmd.Dir = rundir
-
-	c.desired = "UP"
-
-	if err := cmd.Start(); err != nil {
-		// update state
-		return err
-	}
-
-	// no zombies
-	go cmd.Wait()
-
-	// reflect state
-	c.Status = agent.ContainerStatusRunning
-
-	// start
-	return nil
-}
-
-func (c *container) Stop(t time.Duration) error {
-	c.Lock()
-	defer c.Unlock()
-
-	c.desired = "DOWN"
-	c.downDeadline = time.Now().Add(t).Add(heartbeatInterval)
-
-	return nil
+	c.actionRequestc <- req
+	return <-req.res
 }
 
 func (c *container) Destroy() error {
-	var (
-		rundir = filepath.Join("/run/harpoon", c.ID)
-	)
-
-	// TODO: validate that container is stopped
-
-	c.Status = agent.ContainerStatusDeleted
-
-	return os.RemoveAll(rundir)
+	req := actionRequest{
+		action: containerDestroy,
+		res:    make(chan error),
+	}
+	c.actionRequestc <- req
+	return <-req.res
 }
 
-func (c *container) Create() error {
-	var (
-		rundir = filepath.Join("/run/harpoon", c.ID)
-		logdir = filepath.Join("/srv/harpoon/log/", c.ID)
-	)
-
-	if err := os.MkdirAll(rundir, os.ModePerm); err != nil {
-		return fmt.Errorf("mkdir all %s: %s", rundir, err)
+func (c *container) Heartbeat(hb agent.Heartbeat) string {
+	req := heartbeatRequest{
+		heartbeat: hb,
+		res:       make(chan string),
 	}
+	c.hbRequestc <- req
+	return <-req.res
+}
 
-	if err := os.MkdirAll(logdir, os.ModePerm); err != nil {
-		return fmt.Errorf("mkdir all %s: %s", logdir, err)
+func (c *container) Instance() agent.ContainerInstance {
+	return c.ContainerInstance
+}
+
+func (c *container) Restart(t time.Duration) error {
+	req := actionRequest{
+		action:  containerRestart,
+		timeout: t,
+		res:     make(chan error),
 	}
+	c.actionRequestc <- req
+	return <-req.res
+}
 
-	rootfs, err := c.fetchArtifact()
-	if err != nil {
-		return err
+func (c *container) Start() error {
+	req := actionRequest{
+		action: containerDestroy,
+		res:    make(chan error),
 	}
+	c.actionRequestc <- req
+	return <-req.res
+}
 
-	if err := os.Symlink(rootfs, filepath.Join(rundir, "rootfs")); err != nil && !os.IsExist(err) {
-		return err
+func (c *container) Stop(t time.Duration) error {
+	req := actionRequest{
+		action:  containerStop,
+		timeout: t,
+		res:     make(chan error),
 	}
+	c.actionRequestc <- req
+	return <-req.res
+}
 
-	if err := os.Symlink(logdir, filepath.Join(rundir, "log")); err != nil && !os.IsExist(err) {
-		return err
-	}
+func (c *container) Subscribe(ch chan<- agent.ContainerInstance) {
+	c.subc <- ch
+}
 
-	for name, port := range c.Config.Ports {
-		if port == 0 {
-			port = uint16(nextPort())
+func (c *container) Unsubscribe(ch chan<- agent.ContainerInstance) {
+	c.unsubc <- ch
+}
+
+func (c *container) loop() {
+	for {
+		select {
+		case req := <-c.actionRequestc:
+			switch req.action {
+			case containerCreate:
+				req.res <- c.create()
+			case containerDestroy:
+				req.res <- c.destroy()
+			case containerRestart:
+				req.res <- fmt.Errorf("not yet implemented")
+			case containerStart:
+				req.res <- c.start()
+			case containerStop:
+				req.res <- c.stop(req.timeout)
+			default:
+				panic("unknown action")
+			}
+		case req := <-c.hbRequestc:
+			req.res <- c.heartbeat(req.heartbeat)
+		case ch := <-c.subc:
+			c.subscribers[ch] = struct{}{}
+		case ch := <-c.unsubc:
+			delete(c.subscribers, ch)
+		case <-c.quitc:
+			return
 		}
-
-		portName := fmt.Sprintf("PORT_%s", strings.ToUpper(name))
-
-		c.Config.Ports[name] = port
-		c.Config.Env[portName] = strconv.Itoa(int(port))
 	}
-
-	// expand variable in command
-	command := c.Config.Command.Exec
-	for i, arg := range command {
-		command[i] = os.Expand(arg, func(k string) string {
-			return c.Config.Env[k]
-		})
-	}
-
-	if err := c.writeContainerJSON(filepath.Join(rundir, "container.json")); err != nil {
-		return err
-	}
-
-	return c.Start()
 }
 
 func (c *container) buildContainerConfig() {
@@ -263,16 +217,79 @@ func (c *container) buildContainerConfig() {
 			ReadonlyFs:  true,
 		},
 	}
-
 }
 
-func (c *container) writeContainerJSON(dst string) error {
-	data, err := json.Marshal(c.config)
+func (c *container) create() error {
+	var (
+		rundir = filepath.Join("/run/harpoon", c.ID)
+		logdir = filepath.Join("/srv/harpoon/log/", c.ID)
+	)
+
+	if err := os.MkdirAll(rundir, os.ModePerm); err != nil {
+		return fmt.Errorf("mkdir all %s: %s", rundir, err)
+	}
+
+	if err := os.MkdirAll(logdir, os.ModePerm); err != nil {
+		return fmt.Errorf("mkdir all %s: %s", logdir, err)
+	}
+
+	rootfs, err := c.fetchArtifact()
 	if err != nil {
 		return err
 	}
 
-	return ioutil.WriteFile(dst, data, os.ModePerm)
+	if err := os.Symlink(rootfs, filepath.Join(rundir, "rootfs")); err != nil && !os.IsExist(err) {
+		return err
+	}
+
+	if err := os.Symlink(logdir, filepath.Join(rundir, "log")); err != nil && !os.IsExist(err) {
+		return err
+	}
+
+	for name, port := range c.Config.Ports {
+		if port == 0 {
+			port = uint16(nextPort())
+		}
+
+		portName := fmt.Sprintf("PORT_%s", strings.ToUpper(name))
+
+		c.Config.Ports[name] = port
+		c.Config.Env[portName] = strconv.Itoa(int(port))
+	}
+
+	// expand variable in command
+	command := c.Config.Command.Exec
+	for i, arg := range command {
+		command[i] = os.Expand(arg, func(k string) string {
+			return c.Config.Env[k]
+		})
+	}
+
+	return c.writeContainerJSON(filepath.Join(rundir, "container.json"))
+}
+
+func (c *container) destroy() error {
+	var (
+		rundir = filepath.Join("/run/harpoon", c.ID)
+	)
+
+	// TODO: validate that container is stopped
+
+	c.updateStatus(agent.ContainerStatusDeleted)
+
+	err := os.RemoveAll(rundir)
+	if err != nil {
+		return err
+	}
+
+	for subc := range c.subscribers {
+		close(subc)
+	}
+
+	c.subscribers = map[chan<- agent.ContainerInstance]struct{}{}
+	c.quitc <- struct{}{}
+
+	return nil
 }
 
 func (c *container) fetchArtifact() (string, error) {
@@ -308,17 +325,128 @@ func (c *container) fetchArtifact() (string, error) {
 	return artifactPath, nil
 }
 
-func getArtifactPath(artifactURL string) string {
-	parsed, err := url.Parse(artifactURL)
-	if err != nil {
-		panic(fmt.Sprintf("unable to parse url: %s", err))
+func (c *container) heartbeat(hb agent.Heartbeat) string {
+	type state struct{ want, is string }
+
+	switch (state{c.desired, hb.Status}) {
+	case state{"UP", "UP"}:
+		return "UP"
+	case state{"UP", "EXITING"}:
+		c.updateStatus(agent.ContainerStatusFinished)
+		return "EXIT"
+
+	case state{"DOWN", "UP"}:
+		if time.Now().After(c.downDeadline) {
+			return "EXIT"
+		}
+
+		return "DOWN"
+	case state{"DOWN", "EXITING"}:
+		c.updateStatus(agent.ContainerStatusFinished)
+		return "EXIT"
+
+	case state{"EXIT", "UP"}:
+		return "EXIT"
+	case state{"EXIT", "EXITING"}:
+		c.updateStatus(agent.ContainerStatusFinished)
+		return "EXIT"
 	}
 
-	return filepath.Join(
-		"/srv/harpoon/artifacts",
-		parsed.Host,
-		strings.TrimSuffix(parsed.Path, ".tar.gz"),
+	return "UNKNOWN"
+}
+
+func (c *container) start() error {
+	// TODO: validate that container is stopped
+
+	var (
+		rundir = path.Join("/run/harpoon", c.ID)
+		logdir = filepath.Join("/srv/harpoon/log/", c.ID)
 	)
+
+	logPipe, err := startLogger(c.ID, logdir)
+	if err != nil {
+		return err
+	}
+
+	// ensure we don't hold on to the logger
+	defer logPipe.Close()
+
+	cmd := exec.Command(
+		"harpoon-container",
+		c.Config.Command.Exec...,
+	)
+
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf(
+		"heartbeat_url=http://%s/containers/%s/heartbeat",
+		*addr,
+		c.ID,
+	))
+
+	cmd.Stdout = logPipe
+	cmd.Stderr = logPipe
+	cmd.Dir = rundir
+
+	c.desired = "UP"
+
+	if err := cmd.Start(); err != nil {
+		// update state
+		return err
+	}
+
+	// no zombies
+	go cmd.Wait()
+
+	// reflect state
+	c.updateStatus(agent.ContainerStatusRunning)
+
+	// start
+	return nil
+}
+
+func (c *container) stop(t time.Duration) error {
+	c.desired = "DOWN"
+	c.downDeadline = time.Now().Add(t).Add(heartbeatInterval)
+
+	return nil
+}
+
+func (c *container) updateStatus(status agent.ContainerStatus) {
+	c.ContainerInstance.Status = status
+
+	for subc := range c.subscribers {
+		subc <- c.ContainerInstance
+	}
+}
+
+func (c *container) writeContainerJSON(dst string) error {
+	data, err := json.Marshal(c.config)
+	if err != nil {
+		return err
+	}
+
+	return ioutil.WriteFile(dst, data, os.ModePerm)
+}
+
+type containerAction string
+
+const (
+	containerCreate  containerAction = "create"
+	containerDestroy                 = "destroy"
+	containerRestart                 = "restart"
+	containerStart                   = "start"
+	containerStop                    = "stop"
+)
+
+type actionRequest struct {
+	action  containerAction
+	res     chan error
+	timeout time.Duration
+}
+
+type heartbeatRequest struct {
+	heartbeat agent.Heartbeat
+	res       chan string
 }
 
 func extractArtifact(src io.Reader, dst string) (err error) {
@@ -336,6 +464,19 @@ func extractArtifact(src io.Reader, dst string) (err error) {
 	}
 
 	return nil
+}
+
+func getArtifactPath(artifactURL string) string {
+	parsed, err := url.Parse(artifactURL)
+	if err != nil {
+		panic(fmt.Sprintf("unable to parse url: %s", err))
+	}
+
+	return filepath.Join(
+		"/srv/harpoon/artifacts",
+		parsed.Host,
+		strings.TrimSuffix(parsed.Path, ".tar.gz"),
+	)
 }
 
 // HACK

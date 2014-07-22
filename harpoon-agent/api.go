@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,7 @@ func newAPI(r *registry) *api {
 	mux.Post("/containers/:id/heartbeat", http.HandlerFunc(api.handleHeartbeat))
 	mux.Post("/containers/:id/start", http.HandlerFunc(api.handleStart))
 	mux.Post("/containers/:id/stop", http.HandlerFunc(api.handleStop))
+	mux.Get("/containers", http.HandlerFunc(api.handleList))
 
 	return api
 }
@@ -92,7 +95,12 @@ func (a *api) handleCreate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 
 	go func() {
-		if err := container.Create(); err != nil {
+		err := container.Create()
+		if err != nil {
+			log.Printf("[%s] create: %s", id, err)
+		}
+		err = container.Start()
+		if err != nil {
 			log.Printf("[%s] start: %s", id, err)
 		}
 	}()
@@ -183,9 +191,43 @@ func (a *api) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	want := container.heartbeat(heartbeat)
+	want := container.Heartbeat(heartbeat)
 
 	json.NewEncoder(w).Encode(&agent.HeartbeatReply{
 		Want: want,
 	})
+}
+
+func (a *api) handleList(w http.ResponseWriter, r *http.Request) {
+	e := json.NewEncoder(w)
+
+	e.Encode(a.registry.Instances().EventBody())
+
+	if isStreamAccept(r.Header.Get("Accept")) {
+		var (
+			statec = make(chan agent.ContainerInstance)
+		)
+
+		a.registry.Notify(statec)
+		defer a.registry.Stop(statec)
+
+		for state := range statec {
+			e.Encode(state)
+		}
+	}
+}
+
+func isStreamAccept(accept string) bool {
+	for _, a := range strings.Split(accept, ",") {
+		mediatype, _, err := mime.ParseMediaType(a)
+		if err != nil {
+			continue
+		}
+
+		if mediatype == "text/event-stream" {
+			return true
+		}
+	}
+
+	return false
 }
