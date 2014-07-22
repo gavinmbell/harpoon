@@ -287,7 +287,7 @@ func (c *container) destroy() error {
 	}
 
 	c.subscribers = map[chan<- agent.ContainerInstance]struct{}{}
-	c.quitc <- struct{}{}
+	close(c.quitc)
 
 	return nil
 }
