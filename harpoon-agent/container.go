@@ -105,7 +105,7 @@ func (c *container) Restart(t time.Duration) error {
 
 func (c *container) Start() error {
 	req := actionRequest{
-		action: containerDestroy,
+		action: containerStart,
 		res:    make(chan error),
 	}
 	c.actionRequestc <- req
