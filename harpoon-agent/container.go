@@ -105,7 +105,7 @@ func (c *container) Restart(t time.Duration) error {
 
 func (c *container) Start() error {
 	req := actionRequest{
-		action: containerDestroy,
+		action: containerStart,
 		res:    make(chan error),
 	}
 	c.actionRequestc <- req
@@ -287,7 +287,7 @@ func (c *container) destroy() error {
 	}
 
 	c.subscribers = map[chan<- agent.ContainerInstance]struct{}{}
-	c.quitc <- struct{}{}
+	close(c.quitc)
 
 	return nil
 }
