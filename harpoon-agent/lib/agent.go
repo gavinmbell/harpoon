@@ -16,8 +16,9 @@ type Agent interface {
 	Put(containerID string, containerConfig ContainerConfig) error       // PUT /containers/{id}
 	Get(containerID string) (ContainerInstance, error)                   // GET /containers/{id}
 	Start(containerID string) error                                      // POST /containers/{id}/start
-	Stop(containerID string, delaySec int) error                         // POST /containers/{id}/stop?t=5
-	Restart(containerID string, delaySec int) error                      // POST /containers/{id}/restart?t=5
+	Stop(containerID string) error                                       // POST /containers/{id}/stop?t=5
+	Restart(containerID string) error                                    // POST /containers/{id}/restart?t=5
+	Replace(newContainerID, oldContainerID string) error                 // PUT /containers/{newID}?replace={oldID}
 	Delete(containerID string) error                                     // DELETE /containers/{id}
 	Containers() ([]ContainerInstance, error)                            // GET /containers
 	Events() (<-chan ContainerEvent, Stopper, error)                     // GET /containers with request header Accept: text/event-stream
