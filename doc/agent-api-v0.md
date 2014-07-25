@@ -72,6 +72,6 @@ instead yield a stream of `\n`-separated log lines from the container.
 Returns [HostResources][hostresources] information.
 
 
-[containerconfig]: https://github.com/soundcloud/harpoon/blob/537fca991559878c95cc3d7bb66069b1ce085834/harpoon-agent/lib/agent.go#L30-40
-[containerinstance]: https://github.com/soundcloud/harpoon/blob/537fca991559878c95cc3d7bb66069b1ce085834/harpoon-agent/lib/agent.go#L191-211
-[hostresources]: https://github.com/soundcloud/harpoon/blob/537fca991559878c95cc3d7bb66069b1ce085834/harpoon-agent/lib/agent.go#L155-161
+[containerconfig]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-agent/lib#ContainerConfig
+[containerinstance]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-agent/lib#ContainerInstance
+[hostresources]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-agent/lib#HostResources
