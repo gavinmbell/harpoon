@@ -94,3 +94,4 @@ Returns [HostResources][hostresources] information.
 [containerconfig]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-agent/lib#ContainerConfig
 [containerinstance]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-agent/lib#ContainerInstance
 [hostresources]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-agent/lib#HostResources
+[taskconfig]: http://godoc.org/github.com/soundcloud/harpoon/harpoon-configstore/lib#TaskConfig
