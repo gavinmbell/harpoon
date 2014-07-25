@@ -12,7 +12,7 @@ import (
 // component.
 type Scheduler interface {
 	Schedule(Job) error
-	Migrate(Job, configstore.JobConfig) error
+	Migrate(existing Job, newConfig configstore.JobConfig) error
 	Unschedule(Job) error
 	// Probably will need more methods here: status request, etc.
 }

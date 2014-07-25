@@ -46,9 +46,9 @@ func (c JobConfig) Valid() error {
 	return nil
 }
 
-// TaskConfig defines a task in the context of a cfg.
-// TaskConfig + artifact URL can fully define a ContainerConfig.
-// TaskConfig + artifact URL + scale can fully define a task.
+// TaskConfig defines relatively static, configured dimensions of a task.
+// TaskConfig + jobName + artifact URL can fully define an agent.ContainerConfig.
+// TaskConfig + jobName + artifact URL + scale can fully define a scheduler.Job.
 type TaskConfig struct {
 	TaskName     string            `json:"task_name"`     // task.Name
 	Scale        int               `json:"scale"`         // task.Scale
@@ -91,7 +91,7 @@ func (c TaskConfig) Valid() error {
 	return nil
 }
 
-// MakeContainerConfig produces a ContainerConfig from a TaskConfig by
+// MakeContainerConfig produces an agent.ContainerConfig from a TaskConfig by
 // combining it with a job name and artifact URL.
 func (c TaskConfig) MakeContainerConfig(jobName, artifactURL string) agent.ContainerConfig {
 	return agent.ContainerConfig{
@@ -107,8 +107,10 @@ func (c TaskConfig) MakeContainerConfig(jobName, artifactURL string) agent.Conta
 	}
 }
 
-// HealthCheck defines how a third party can determine if an instance of a given task is healthy.
-// HealthChecks are defined and persisted in the config store, but executed by the agent or scheduler.
+// HealthCheck defines how a third party can determine if an instance of a
+// given task is healthy. HealthChecks are defined and persisted in the config
+// store, but executed by the agent or scheduler.
+//
 // HealthChecks are largely inspired by the Marathon definition.
 // https://github.com/mesosphere/marathon/blob/master/REST.md
 type HealthCheck struct {
