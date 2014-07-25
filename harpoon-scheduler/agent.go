@@ -30,6 +30,9 @@ const (
 // HTTP.
 type remoteAgent struct{ url.URL }
 
+// Satisfaction guaranteed.
+var _ agent.Agent = remoteAgent{}
+
 func newRemoteAgent(endpoint string) (remoteAgent, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -225,7 +228,7 @@ func (c remoteAgent) Put(containerID string, containerConfig agent.ContainerConf
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK:
+	case http.StatusAccepted:
 		return nil
 
 	default:
@@ -311,7 +314,7 @@ func (c remoteAgent) Start(containerID string) error {
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK:
+	case http.StatusAccepted:
 		return nil
 
 	default:
@@ -323,11 +326,10 @@ func (c remoteAgent) Start(containerID string) error {
 	}
 }
 
-func (c remoteAgent) Stop(containerID string, delaySec int) error {
+func (c remoteAgent) Stop(containerID string) error {
 	c.URL.Path = apiVersionPrefix + apiPostContainerPath
 	c.URL.Path = strings.Replace(c.URL.Path, ":id", containerID, 1)
 	c.URL.Path = strings.Replace(c.URL.Path, ":action", "stop", 1)
-	c.URL.RawQuery = fmt.Sprintf(`t=%d`, delaySec)
 	req, err := http.NewRequest("POST", c.URL.String(), nil)
 	if err != nil {
 		return fmt.Errorf("problem constructing HTTP request (%s)", err)
@@ -352,11 +354,10 @@ func (c remoteAgent) Stop(containerID string, delaySec int) error {
 	}
 }
 
-func (c remoteAgent) Restart(containerID string, delaySec int) error {
+func (c remoteAgent) Restart(containerID string) error {
 	c.URL.Path = apiVersionPrefix + apiPostContainerPath
 	c.URL.Path = strings.Replace(c.URL.Path, ":id", containerID, 1)
 	c.URL.Path = strings.Replace(c.URL.Path, ":action", "restart", 1)
-	c.URL.RawQuery = fmt.Sprintf(`t=%d`, delaySec)
 	req, err := http.NewRequest("POST", c.URL.String(), nil)
 	if err != nil {
 		return fmt.Errorf("problem constructing HTTP request (%s)", err)
@@ -379,6 +380,10 @@ func (c remoteAgent) Restart(containerID string, delaySec int) error {
 		}
 		return fmt.Errorf("%s (HTTP %d %s)", response.Error, response.StatusCode, response.StatusText)
 	}
+}
+
+func (c remoteAgent) Replace(newContainerID, oldContainerID string) error {
+	return fmt.Errorf("replace is not implemented or used by the harpoon scheduler")
 }
 
 func (c remoteAgent) Log(containerID string, history int) (<-chan string, agent.Stopper, error) {

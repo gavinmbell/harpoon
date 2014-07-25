@@ -225,7 +225,7 @@ func unscheduleOne(
 	}
 
 	// POST stop
-	if err := stateMachine.proxy().Stop(containerID, taskSpec.ContainerConfig.Grace.Shutdown); err != nil {
+	if err := stateMachine.proxy().Stop(containerID); err != nil {
 		log.Printf("transformer: %s: stop container %s failed: %s", taskSpec.endpoint, containerID, err)
 		return signalContainerStopFailed
 	}

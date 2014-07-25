@@ -190,11 +190,18 @@ func mockWriteContainerStreamEvent(w io.Writer, eventName string, v interface{})
 
 func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.putContainerCount, 1)
+
 	id := p.ByName("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q required", "id"))
 		return
 	}
+
+	if r.URL.Query().Get("replace") != "" {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("replacement not yet implemented in the mock"))
+		return
+	}
+
 	var config agent.ContainerConfig
 	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -205,12 +212,16 @@ func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httpr
 		Status: agent.ContainerStatusRunning,
 		Config: config,
 	}
+
+	// Just PUT, don't start.
 	func() {
 		c.Lock()
 		defer c.Unlock()
 		c.instances[id] = instance
 	}()
 	c.changesIn <- map[string]agent.ContainerInstance{id: instance}
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (c *mockAgent) getContainer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -265,7 +276,7 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 	}
 	switch action := p.ByName("action"); action {
 	case "start":
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("start not yet implemented"))
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("start not yet implemented"))
 
 	case "stop":
 		c.Lock()
@@ -284,14 +295,12 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 		go func() {
 			c.Lock()
 			defer c.Unlock()
-			// t := r.FormValue("t") // ignore in the mock
-			// Also, could put a delay here...
 			c.instances[id] = containerInstance
 			c.changesIn <- map[string]agent.ContainerInstance{id: containerInstance}
 		}()
 
 	case "restart":
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("restart not yet implemented"))
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("restart not yet implemented"))
 	default:
 		writeError(w, http.StatusBadRequest, fmt.Errorf("unknown action %q", action))
 	}
@@ -299,7 +308,7 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 
 func (c *mockAgent) getContainerLog(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.getContainerLogCount, 1)
-	writeError(w, http.StatusInternalServerError, fmt.Errorf("not yet implemented"))
+	writeError(w, http.StatusNotImplemented, fmt.Errorf("not yet implemented"))
 }
 
 func (c *mockAgent) getResources(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
