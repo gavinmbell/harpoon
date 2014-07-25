@@ -20,28 +20,46 @@ Returns a JSON-encoded [ContainerInstance][containerinstance].
 ### `POST /containers/{id}/start`
 
 Starts the container. Does nothing if the container is already running.
-Returns immediately with 202 if the container exists. To check if a started
-container is running, poll `GET /containers/{id}`.
+Returns immediately with 202 if the container exists. If the container doesn't
+start within the startup grace period specified in the
+[TaskConfig][taskconfig], the agent is free to forcefully terminate the
+container. To check if a started container is running, poll `GET
+/containers/{id}`.
 
-### `POST /containers/{id}/stop?t=5`
+### `POST /containers/{id}/stop`
 
-Stops the container. Sends SIGTERM, and waits t seconds for the container to
-exit gracefully before sending a SIGKILL. Returns immediately with 202 if the
+Stops the container. Sends SIGTERM, and waits for the container to exit. If
+the container doesn't stop with in the shutdown grace period specified in the
+[TaskConfig][taskconfig], sends SIGKILL. Returns immediately with 202 if the
 container exists.
 
 Note that a stopped container still retains its resource reservations.
 
-### `POST /containers/{id}/restart?t=5`
+### `POST /containers/{id}/restart`
 
-Start the container if previously stopped, otherwise stop and then start. To
-stop, sends SIGTERM, and waits t seconds for the container to exit gracefully
-before sending a SIGKILL. Returns immediately with 202 if container exists.
+Start the container if previously stopped, otherwise stop and then start.
+Returns immediately with 202 if container exists. To stop, follows the same
+procedure as `POST /container/{id}/stop`, above.
+
+### `PUT /containers/{id}?replace={old_id}`
+
+Replace an existing container with a new one. Request body should be the
+container configuration. Returns immediately with 202 if the configuration is
+valid, the host has sufficient resources, and `{old_id}` exists and is
+running.
+
+The new container will be initialized and started. If it is successful, the old
+container will be destroyed. If the new container is unable to start, it will
+enter a failed state and the old container will be unchanged.
+
+This method is designed to be used by schedulers other than harpoon-scheduler.
+Specifically, it's intended to provide a safer upgrade process for stateful
+services.
 
 ## `DELETE /containers/{id}`
 
 Destroys a container. Frees any resources associated with the container. Fails
 if the container is currently running.
-
 
 ## `GET /containers`
 
