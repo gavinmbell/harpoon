@@ -134,3 +134,26 @@ func TestTransformerScheduleUnschedule(t *testing.T) {
 
 	log.Printf("☞ finished")
 }
+
+func TestFwd(t *testing.T) {
+	var (
+		in   = make(chan registryState)
+		out  = make(chan registryState)
+		done = make(chan struct{})
+	)
+	go func() { fwd(out, in); close(done) }()
+
+	go func() {
+		in <- registryState{}
+		in <- registryState{}
+		<-out
+		in <- registryState{}
+		close(in)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Millisecond):
+		t.Error("timeout")
+	}
+}

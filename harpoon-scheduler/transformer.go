@@ -117,12 +117,17 @@ func (t *transformer) loop(
 	}
 }
 
+// fwd is a single-value-caching forwarder between two chans.
 func fwd(dst chan<- registryState, src <-chan registryState) {
 	for s := range src {
 		func() {
 			for {
+				var ok bool
 				select {
-				case s = <-src: // overwrite
+				case s, ok = <-src: // overwrite
+					if !ok {
+						return
+					}
 				case dst <- s: // successful fwd
 					return
 				}
@@ -215,7 +220,7 @@ func unscheduleOne(
 	agentPollInterval time.Duration,
 ) schedulingSignal {
 	// Unscheduling is a bit of a dance.
-	//  1. POST /containers/{id}/stop?t=N
+	//  1. POST /containers/{id}/stop
 	//  2. Poll GET /containers/{id} until it's terminated
 	//  3. DELETE /containers/{id}
 	stateMachine, ok := stateMachines[taskSpec.endpoint]
