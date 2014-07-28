@@ -314,7 +314,7 @@ func xsched(
 			}
 			undo = append(undo, func() { revert(containerID, taskSpec, nil) })
 		case <-time.After(2 * choose(taskSpec.Grace)):
-			return fmt.Errorf("schedule %s on %s: timeout", containerID, taskSpec.endpoint)
+			return fmt.Errorf("%s %s on %s: timeout", what, containerID, taskSpec.endpoint)
 		}
 	}
 

@@ -84,7 +84,17 @@ func handleMigrate(scheduler scheduler.Scheduler) http.HandlerFunc {
 
 func handleUnschedule(scheduler scheduler.Scheduler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusTeapot, fmt.Errorf("not yet implemented"))
+		job, err := readJob(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		defer r.Body.Close()
+		if err := scheduler.Unschedule(job); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeSuccess(w, fmt.Sprintf("%s successfully unscheduled", job.JobName))
 	}
 }
 
