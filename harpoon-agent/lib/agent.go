@@ -16,8 +16,8 @@ type Agent interface {
 	Put(containerID string, containerConfig ContainerConfig) error       // PUT /containers/{id}
 	Get(containerID string) (ContainerInstance, error)                   // GET /containers/{id}
 	Start(containerID string) error                                      // POST /containers/{id}/start
-	Stop(containerID string) error                                       // POST /containers/{id}/stop?t=5
-	Restart(containerID string) error                                    // POST /containers/{id}/restart?t=5
+	Stop(containerID string) error                                       // POST /containers/{id}/stop
+	Restart(containerID string) error                                    // POST /containers/{id}/restart
 	Replace(newContainerID, oldContainerID string) error                 // PUT /containers/{newID}?replace={oldID}
 	Delete(containerID string) error                                     // DELETE /containers/{id}
 	Containers() ([]ContainerInstance, error)                            // GET /containers
