@@ -318,25 +318,25 @@ const (
 func (s schedulingSignal) String() string {
 	switch s {
 	case signalScheduleSuccessful:
-		return "signalScheduleSuccessful"
+		return "schedule-successful"
 	case signalScheduleFailed:
-		return "signalScheduleFailed"
+		return "schedule-failed"
 	case signalUnscheduleSuccessful:
-		return "signalUnscheduleSuccessful"
+		return "unschedule-successful"
 	case signalUnscheduleFailed:
-		return "signalUnscheduleFailed"
+		return "unschedule-failed"
 	case signalContainerLost:
-		return "signalContainerLost"
+		return "container-lost"
 	case signalAgentUnavailable:
-		return "signalAgentUnavailable"
+		return "agent-unavailable"
 	case signalContainerPutFailed:
-		return "signalContainerPutFailed"
+		return "container-put-failed"
 	case signalContainerStartFailed:
-		return "signalContainerStartFailed"
+		return "container-start-failed"
 	case signalContainerStopFailed:
-		return "signalContainerStopFailed"
+		return "container-stop-failed"
 	case signalContainerDeleteFailed:
-		return "signalContainerDeleteFailed"
+		return "container-delete-failed"
 	default:
 		return "unknown-signal"
 	}
