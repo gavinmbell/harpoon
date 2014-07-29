@@ -132,8 +132,8 @@ func ExpectMessage(t *testing.T, logSink chan string, expected string) {
 	var msg string
 	select {
 	case msg = <-logSink:
-		// Don't block test suite, while conveniently forcing a context switch so that the
-		// results have time to propogate.
+	// Don't block test suite, while conveniently forcing a context switch so that the
+	// results propogate during test.
 	case <-time.After(time.Millisecond):
 		t.Errorf("Nothing received")
 	}
@@ -146,8 +146,8 @@ func ExpectNoMessage(t *testing.T, logSink chan string) {
 	select {
 	case msg := <-logSink:
 		t.Errorf("Received log line %q when we should have received nothing", msg)
-		// Don't block test suite, while conveniently forcing a context switch so that the
-		// results have time to propogate.
+	// Don't block test suite, while conveniently forcing a context switch so that the
+	// results propogate during test.
 	case <-time.After(time.Millisecond):
 		t.Errorf("Something blocked that should not have")
 	default:

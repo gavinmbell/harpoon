@@ -1,22 +1,26 @@
 package main
 
+/*
+ Provides log management.
+
+ At the highest level there is a LogSet.  A LogSet consists of containerLogs.  Each containerLog
+ has a RingBuffer to hold log lines.
+
+ Applications interact with the LogSet. The log set provides high level opertaions mirroring
+ those provided by the message.  It provides synchronization.  It dispatches opertions to
+ the appropriate containerLog based on the ContainerID.
+
+ containerLogs implement log buffering, listening, and log retrieval for a single
+ container.
+
+ RingBuffer implements rolling log storage and retrieval of the last N log lines.
+*/
 import (
 	"container/ring"
 	"log"
 	"math"
 	"net"
 	"sync"
-)
-
-type logAction int
-
-const (
-	_						  = iota
-	logActionReceive logAction = iota
-	logActionLast
-	logActionListen
-	logActionDropListener
-	logActionExit
 )
 
 // ContainerID is an opaque identifier for a container
@@ -28,16 +32,17 @@ type ContainerID string
 type ListenerID int32
 
 type containerLog struct {
-	containerID	ContainerID
-	entries		*RingBuffer
-	listeners	  map[ListenerID]chan string
+	containerID    ContainerID
+	entries        *RingBuffer
+	listeners      map[ListenerID]chan string
 	nextListenerID ListenerID
 }
 
 func newContainerLog(containerID ContainerID, bufferSize int) *containerLog {
-	return &containerLog{containerID: containerID,
-		entries:		NewRingBuffer(bufferSize),
-		listeners:	  make(map[ListenerID]chan string),
+	return &containerLog{
+		containerID:    containerID,
+		entries:        NewRingBuffer(bufferSize),
+		listeners:      make(map[ListenerID]chan string),
 		nextListenerID: 1,
 	}
 }
@@ -74,18 +79,27 @@ func (cl *containerLog) dropListener(listenerID ListenerID) {
 // Once a buffer for a container fills the oldest log elements are discarded to make
 // room for new ones.
 type LogSet struct {
-	logs	   map[ContainerID]*containerLog
-	bufferSize int
-	msgs	   chan *logSetMsg
+	logs             map[ContainerID]*containerLog
+	bufferSize       int
+	receiveMsgs      chan *logSetReceiveMsg
+	lastMsgs         chan *logSetLastMsg
+	listenMsgs       chan *logSetListenMsg
+	dropListenerMsgs chan *logSetDropListenerMsg
+	exitMsgs         chan *logSetExitMsg
 }
 
 // NewLogSet creates a LogSet.  All containers will have log buffers of
-// bufferSize messages.
+// bufferSize messages.  Launches message processing loop.
 func NewLogSet(bufferSize int) *LogSet {
 	ls := &LogSet{
-		logs: make(map[ContainerID]*containerLog),
-		bufferSize: bufferSize,
-		msgs: make(chan *logSetMsg)}
+		logs:             map[ContainerID]*containerLog{},
+		bufferSize:       bufferSize,
+		receiveMsgs:      make(chan *logSetReceiveMsg),
+		lastMsgs:         make(chan *logSetLastMsg),
+		listenMsgs:       make(chan *logSetListenMsg),
+		dropListenerMsgs: make(chan *logSetDropListenerMsg),
+		exitMsgs:         make(chan *logSetExitMsg),
+	}
 	go ls.loop()
 	return ls
 }
@@ -118,24 +132,31 @@ func (ls *LogSet) receiveLogs() {
 	}
 }
 
-// logSetMsg provides communication between the API calls and a LogSet's
-// loop() method.  I chose one intance so that I'd have
-type logSetMsg struct {
-	action	  logAction   // supplied by wrapper
+// Messages sent.
+type logSetReceiveMsg struct {
 	containerID ContainerID // supplied by caller
-	// receiveLogLine
-	logLine string // supplied by caller
+	logLine     string      // supplied by caller
+}
 
-	// Last
-	count int		   // supplied by caller
-	last  chan []string // passes result to caller
+type logSetLastMsg struct {
+	containerID ContainerID   // supplied by caller
+	count       int           // supplied by caller
+	last        chan []string // passes result to caller
+}
 
-	// Listen argument/results
-	logSink		  chan string	 // supplied by caller
+type logSetListenMsg struct {
+	containerID      ContainerID     // supplied by caller
+	logSink          chan string     // supplied by caller
 	listenerIDResult chan ListenerID // passes result to caller
+}
 
-	// DeleteListener
-	listenerID ListenerID // supplied by caller
+type logSetDropListenerMsg struct {
+	containerID ContainerID // supplied by caller
+	listenerID  ListenerID  // supplied by caller
+}
+
+type logSetExitMsg struct {
+	containerID ContainerID // supplied by caller
 }
 
 // receiveLogLine feeds a log entry into a container's log buffer.
@@ -150,7 +171,7 @@ type logSetMsg struct {
 //  If the number of dropped notifications goes up then a listener is not consuming
 //  notifications fast enough.  Look for a stalled listener.
 func (ls *LogSet) receiveLogLine(containerID ContainerID, logLine string) {
-	ls.msgs <- &logSetMsg{action: logActionReceive, containerID: containerID, logLine: logLine}
+	ls.receiveMsgs <- &logSetReceiveMsg{containerID: containerID, logLine: logLine}
 }
 
 // Last retrieves the n last log lines from containerID, returning them in
@@ -158,7 +179,7 @@ func (ls *LogSet) receiveLogLine(containerID ContainerID, logLine string) {
 // The call is is idempotent.
 func (ls *LogSet) Last(containerID ContainerID, n int) []string {
 	last := make(chan []string)
-	ls.msgs <- &logSetMsg{action: logActionLast, containerID: containerID, count: n, last: last}
+	ls.lastMsgs <- &logSetLastMsg{containerID: containerID, count: n, last: last}
 	return <-last
 }
 
@@ -169,36 +190,38 @@ func (ls *LogSet) Last(containerID ContainerID, n int) []string {
 //
 // The caller can subsequently use the ListenerID to remove the subscription.
 func (ls *LogSet) Listen(containerID ContainerID, logSink chan string) ListenerID {
-	msg := &logSetMsg{action: logActionListen, containerID: containerID, logSink: logSink, listenerIDResult: make(chan ListenerID)}
-	ls.msgs <- msg
+	msg := &logSetListenMsg{
+		containerID:      containerID,
+		logSink:          logSink,
+		listenerIDResult: make(chan ListenerID)}
+	ls.listenMsgs <- msg
 	return <-msg.listenerIDResult
 }
 
 // DropListener removes a listener from a container's log.  The ListenerID was
 // obtained when the client called Listen().
 func (ls *LogSet) DropListener(containerID ContainerID, listenerID ListenerID) {
-	ls.msgs <- &logSetMsg{action: logActionDropListener, containerID: containerID, listenerID: listenerID}
+	ls.dropListenerMsgs <- &logSetDropListenerMsg{containerID: containerID, listenerID: listenerID}
 }
 
 // Exit causes the LogSet's loop() to terminate.
 func (ls *LogSet) Exit() {
-	ls.msgs <- &logSetMsg{action: logActionExit}
+	ls.exitMsgs <- &logSetExitMsg{}
 }
 
 // Processes messages one at a time
 func (ls *LogSet) loop() {
 	for {
-		msg := <-ls.msgs
-		switch msg.action {
-		case logActionReceive:
+		select {
+		case msg := <-ls.receiveMsgs:
 			ls.getContainerLog(msg.containerID).insert(msg.logLine)
-		case logActionLast:
+		case msg := <-ls.lastMsgs:
 			msg.last <- ls.getContainerLog(msg.containerID).entries.Last(msg.count)
-		case logActionListen:
+		case msg := <-ls.listenMsgs:
 			msg.listenerIDResult <- ls.getContainerLog(msg.containerID).addListener(msg.logSink)
-		case logActionDropListener:
+		case msg := <-ls.dropListenerMsgs:
 			delete(ls.getContainerLog(msg.containerID).listeners, msg.listenerID)
-		case logActionExit:
+		case <-ls.exitMsgs:
 			return
 		}
 	}
@@ -259,16 +282,14 @@ func (b *RingBuffer) Last(count int) []string {
 // reverse reverses the oder of a slice destructively.
 func reverse(x []string) []string {
 	for i := 0; i < len(x)/2; i++ {
-		t := x[i]
-		x[i] = x[len(x)-i-1]
-		x[len(x)-i-1] = t
+		x[i], x[len(x)-i-1] = x[len(x)-i-1], x[i]
 	}
 	return x
 }
 
 // min returns the minimum of two ints.
 func min(x int, y int) int {
-     if x < y {
+	if x < y {
 		return x
 	} else {
 		return y
