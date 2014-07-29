@@ -241,14 +241,21 @@ func (a *api) handleResources(w http.ResponseWriter, r *http.Request) {
 		volumes = append(volumes, vol)
 	}
 
+	var reservedMem, reservedCPU float64
+
+	for _, instance := range a.registry.Instances() {
+		reservedMem += float64(instance.Config.Resources.Memory)
+		reservedCPU += float64(instance.Config.Resources.CPUs)
+	}
+
 	json.NewEncoder(w).Encode(&agent.HostResources{
 		Memory: agent.TotalReserved{
 			Total:    float64(agentTotalMem),
-			Reserved: 0, // TODO: enumerate created containers
+			Reserved: reservedMem,
 		},
 		CPUs: agent.TotalReserved{
 			Total:    float64(agentTotalCPU),
-			Reserved: 0, // TODO: enumerate created containers
+			Reserved: reservedCPU,
 		},
 		Volumes: volumes,
 	})
