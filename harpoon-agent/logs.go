@@ -1,22 +1,55 @@
 package main
 
 import (
+	"container/ring"
 	"log"
+	"math"
 	"net"
+	"sync"
 )
 
+type logAction int
+const (
+	_ = iota
+	logActionReceive logAction = iota
+	logActionLast
+	logActionListen
+	logActionDropListener
+	logActionExit
+)
 
-type logset struct {
-	clientID string
-	LogEntries RingBuffer
-	LogListeners []chan string
+type ContainerID string;
+type ListenerID int32;
+
+type containerLog struct {
+	containerID ContainerID
+	entries *RingBuffer
+	listeners map[ListenerID]chan string
+	nextListenerID ListenerID
 }
 
-type logs struct {
-	logs map[string]logset
+func newContainerLog(containerID ContainerID, bufferSize int) *containerLog {
+	return &containerLog{containerID: containerID,
+		entries: NewRingBuffer(bufferSize),
+		listeners: make(map[ListenerID]chan string),
+		nextListenerID: 1,
+	}
 }
 
-func receiveLogs() {
+// TODO: Expire old containers
+type LogSet struct {
+	logs map[ContainerID]*containerLog
+	bufferSize int
+	msgs chan *logSetMsg
+}
+
+func NewLogSet(bufferSize int) *LogSet {
+	ls := &LogSet{logs: make(map[ContainerID]*containerLog), bufferSize: bufferSize, msgs: make(chan *logSetMsg)}
+	go ls.loop()
+	return ls
+}
+
+func (ls *LogSet) receiveLogs() {
 	laddr, err := net.ResolveUDPAddr("udp", ":3334")
 	if err != nil {
 		log.Fatal(err)
@@ -37,22 +70,32 @@ func receiveLogs() {
 			return
 		}
 
+		ls.receiveLogLine(ContainerID(addr.String()), string(buf[:n]))
 		log.Printf("LOG: %s : %s", addr, buf[:n])
 	}
 }
 
+type logSetMsg struct {
+	action logAction // supplied by wrapper
+	containerID ContainerID  // supplied by caller
+	// receiveLogLine
+	logLine string  // supplied by caller
+
+	// Last
+	count int  // supplied by caller
+	last chan []string  // passes result to caller
+
+	// Listen argument/results
+	logSink chan string  // supplied by caller
+	listenerIDResult chan ListenerID  // passes result to caller
+
+	// DeleteListener
+	listenerID ListenerID  // supplied by caller
+
+}
+
 // Feeds a log entry into the system.  Handles rollover when log is full.  Sends to listeners.
 // If anything goes wrong it silently drops the string.
-//
-// TESTS:
-//  adding a log line to an empty buffer
-//  adding a log line appends
-//  adding a log line to a full log causes the oldest log record to be dropped and the new log
-//    record inserted
-//  all listeners receive notifications
-//  a blocked listener does not block addition
-//  a blocked listener does not block other listeners
-//  adding a log record for one container does not update another e.g. containers are distict logs
 //
 // METRICS:
 //  # number lines received
@@ -63,67 +106,127 @@ func receiveLogs() {
 // NOTES:
 //  If the number of dropped notifications goes up then a listener is not consuming
 //  notifications fast enough.  Look for a stalled listener.
-func receiveLogLine(containerID string, logLine string) {
+func (ls *LogSet) receiveLogLine(containerID ContainerID, logLine string) {
+	ls.msgs <- &logSetMsg {action: logActionReceive, containerID: containerID, logLine: logLine}
 }
 
-// Feeds a log entry into the log buffer. If the buffer is full then the oldest entry is flushed.
-//
-// TESTS:
-//   adding a log line to an empty log works
-//   log line retrieves
-//
-func writeLogLineToBuffer(containerID string, logLine string) {
-}
-
-// Retrieves the n latest log lines from containerID.  This call
+// Retrieves the n last log lines from containerID.  This call
 // is idempotent.
-//
-// TESTS:
-//   empty log returns nothing
-//   if log has x log lines and x < n then x are returned
-//   if log has x log lines and x = n then n are returned
-//   if log has x log lines and x > n then the last n are returned
-//   two calls without log modification in between return the same results
-//   two read calls without log modification in between return different results
-//   a log call only returns log lines for the specified containerID
-func RetrieveLatestLogLines(containerID string, n int) []string {
-	return [];
+func (ls *LogSet) Last(containerID ContainerID, n int) []string {
+	last := make(chan []string)
+	ls.msgs <- &logSetMsg {action: logActionLast, containerID: containerID, count: n, last: last}
+	return <- last
 }
 
-// Starts feeding log lines from containerID into logSink.  If logs are
-// the channel fills up then the log blocks.
-//
-// listening to an empty log does nothing
-// logSink is updated when a new message is written to the log
-// two listeners are updated when a new message is written to the log
-// a listener only receives messages intended for it
-// a blocked logSink does not prevent messages from being written into the log
-// a blocked logSink does not prevent other listeners from receiving updates
-func ListenToLog(containerID string, logSink chan string) {
+// Feed new log lines from containerID into logSink.  While a logSink is blocked it will not
+// receive messages.
+func (ls *LogSet) Listen(containerID ContainerID, logSink chan string) ListenerID {
+	msg := &logSetMsg {action: logActionListen, containerID: containerID, logSink: logSink, listenerIDResult: make(chan ListenerID)}
+	ls.msgs <- msg
+	return <- msg.listenerIDResult
 }
 
+// Remove a listener from a containerLog.
+func (ls *LogSet) DropListener(containerID ContainerID, listenerID ListenerID) {
+	ls.msgs <- &logSetMsg {action: logActionDropListener, containerID: containerID, listenerID: listenerID}
+}
 
-// A non-blocking ring buffer that allows you to retrieve the last n records without
-// idempotently.
+func (ls *LogSet) Exit() {
+	ls.msgs <- &logSetMsg {action: logActionExit}
+}
+
+// Processes messages one at a time
+func (ls *LogSet) loop() {
+	for {
+		msg := <- ls.msgs
+		switch msg.action {
+		case logActionReceive:
+			containerLog := ls.getContainerLog(msg.containerID)
+			containerLog.entries.Insert(msg.logLine)
+			// Send the logLine to all listeners, skipping those who have blocked channels
+			for _, logSink := range containerLog.listeners {
+				select {
+				case logSink <- msg.logLine:
+					// Message sent successfully
+				default:
+					// Message dropped
+				}
+			}
+		case logActionLast:
+			msg.last <- ls.getContainerLog(msg.containerID).entries.Last(msg.count)
+		case logActionListen:
+			containerLog := ls.getContainerLog(msg.containerID)
+			if containerLog.nextListenerID == math.MaxInt32 {
+				panic("Whoooaaa we've had 2^32 listeners.")
+			}
+			listenerID := containerLog.nextListenerID
+			containerLog.listeners[listenerID] = msg.logSink
+			containerLog.nextListenerID++
+			msg.listenerIDResult <- listenerID
+		case logActionDropListener:
+			delete(ls.getContainerLog(msg.containerID).listeners, msg.listenerID)
+		case logActionExit:
+			return
+		}
+	}
+}
+
+func (ls *LogSet) getContainerLog(containerID ContainerID) *containerLog {
+	x, ok := ls.logs[containerID]
+	if !ok {
+		x = newContainerLog(containerID, ls.bufferSize)
+	}
+	ls.logs[containerID] = x
+	return x
+}
+
+// Ring buffer that allows you to retrieve the last n records.  Retrieval calls are idempotent.
 type RingBuffer struct {
-	buffer []string
-	head int
-	length n
-	insertCmds chan string
-	lastCmds chan struct {count int, result chan []string}
+	elements *ring.Ring
+	length int
+	mutex sync.Mutex
 }
 
-func newRingBuffer() {
+func NewRingBuffer(size int) *RingBuffer {
+	return &RingBuffer {elements: ring.New(size), length: size};
 }
 
-func Insert(x string) {
+func (b *RingBuffer) Insert(x string) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	b.elements.Value = x
+	b.elements = b.elements.Next()
 }
 
-func Last(count int) []string {
+func (b *RingBuffer) Last(count int) []string {
+	count = min(count, b.length)
+	results := make([]string, 0, count)
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	prev := b.elements
+	for i := 0; i < count; i++ {
+		prev = prev.Prev()
+		if prev.Value == nil {
+			break;
+		}
+		results = append(results, prev.Value.(string))
+	}
+	return reverse(results)
 }
 
-func loop() {
+func reverse(x []string) []string {
+	for i := 0; i < len(x)/2; i++ {
+		t := x[i]
+		x[i] = x[len(x)-i-1]
+		x[len(x)-i-1] = t
+	}
+	return x
 }
 
-func get(i int) string {
+func min(x int, y int) int {
+	if x < y {
+		return x
+	} else {
+		return y
+	}
 }

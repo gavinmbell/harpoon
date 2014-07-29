@@ -29,7 +29,8 @@ func init() {
 }
 
 func main() {
-	go receiveLogs()
+	logSet := NewLogSet(10000)
+	logSet.receiveLogs()
 
 	flag.Int64Var(&agentTotalCPU, "cpu", -1, "available cpu resources (-1 to use all cpus)")
 	flag.Int64Var(&agentTotalMem, "mem", -1, "available memory resources in MB (-1 to use all)")
