@@ -94,6 +94,7 @@ func (s *stateMachine) loop(
 	for {
 		select {
 		case containerEvent, ok := <-containerEvents:
+			incContainerEventsReceived(1)
 			if !ok {
 				log.Printf("state machine: %s: container events chan closed", endpoint)
 				log.Printf("state machine: %s: TODO: re-establish connection", endpoint)

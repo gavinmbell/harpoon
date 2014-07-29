@@ -96,6 +96,8 @@ func (t *transformer) loop(
 				actual  = remoteState(stateMachines)
 			)
 			toSchedule, toUnschedule := diffRegistryStates(desired, actual)
+			incTaskScheduleRequests(len(toSchedule))
+			incTaskUnscheduleRequests(len(toUnschedule))
 			for containerID, taskSpec := range toSchedule {
 				// Can be made concurrent.
 				log.Printf("transformer: triggering schedule %v on %s", containerID, taskSpec.endpoint)
