@@ -5,10 +5,8 @@ import (
 	"log"
 	"mime"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 
@@ -112,12 +110,7 @@ func (a *api) handleCreate(w http.ResponseWriter, r *http.Request) {
 func (a *api) handleStop(w http.ResponseWriter, r *http.Request) {
 	var (
 		id = r.URL.Query().Get(":id")
-		t  = r.URL.Query().Get("t")
 	)
-
-	if t == "" {
-		t = "5"
-	}
 
 	container, ok := a.registry.Get(id)
 	if !ok {
@@ -125,13 +118,7 @@ func (a *api) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timeout, err := strconv.Atoi(t)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	container.Stop(time.Duration(timeout) * time.Second)
+	container.Stop()
 	w.WriteHeader(http.StatusAccepted)
 }
 

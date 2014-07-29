@@ -93,11 +93,10 @@ func (c *container) Instance() agent.ContainerInstance {
 	return c.ContainerInstance
 }
 
-func (c *container) Restart(t time.Duration) error {
+func (c *container) Restart() error {
 	req := actionRequest{
-		action:  containerRestart,
-		timeout: t,
-		res:     make(chan error),
+		action: containerRestart,
+		res:    make(chan error),
 	}
 	c.actionRequestc <- req
 	return <-req.res
@@ -112,11 +111,10 @@ func (c *container) Start() error {
 	return <-req.res
 }
 
-func (c *container) Stop(t time.Duration) error {
+func (c *container) Stop() error {
 	req := actionRequest{
-		action:  containerStop,
-		timeout: t,
-		res:     make(chan error),
+		action: containerStop,
+		res:    make(chan error),
 	}
 	c.actionRequestc <- req
 	return <-req.res
@@ -144,7 +142,7 @@ func (c *container) loop() {
 			case containerStart:
 				req.res <- c.start()
 			case containerStop:
-				req.res <- c.stop(req.timeout)
+				req.res <- c.stop()
 			default:
 				panic("unknown action")
 			}
@@ -400,13 +398,15 @@ func (c *container) start() error {
 	// reflect state
 	c.updateStatus(agent.ContainerStatusRunning)
 
+	// TODO(??): where do we use the Startup timeout?
+
 	// start
 	return nil
 }
 
-func (c *container) stop(t time.Duration) error {
+func (c *container) stop() error {
 	c.desired = "DOWN"
-	c.downDeadline = time.Now().Add(t).Add(heartbeatInterval)
+	c.downDeadline = time.Now().Add(time.Duration(c.Config.Grace.Shutdown) * time.Second).Add(heartbeatInterval)
 
 	return nil
 }
@@ -439,9 +439,8 @@ const (
 )
 
 type actionRequest struct {
-	action  containerAction
-	res     chan error
-	timeout time.Duration
+	action containerAction
+	res    chan error
 }
 
 type heartbeatRequest struct {
