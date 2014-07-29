@@ -7,10 +7,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/docker/docker/pkg/system"
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/cgroups/fs"
 	"github.com/docker/libcontainer/namespaces"
-	"github.com/dotcloud/docker/pkg/system"
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
