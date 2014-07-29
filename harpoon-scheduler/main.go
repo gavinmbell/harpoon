@@ -7,8 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -152,7 +154,16 @@ type multiagent map[string]struct{}
 
 func (*multiagent) String() string { return "" }
 
-func (a *multiagent) Set(value string) error { (*a)[value] = struct{}{}; return nil }
+func (a *multiagent) Set(value string) error {
+	if !strings.HasPrefix(strings.ToLower(value), "http") {
+		value = "http://" + value
+	}
+	if _, err := url.Parse(value); err != nil {
+		return fmt.Errorf("invalid agent endpoint: %s", err)
+	}
+	(*a)[value] = struct{}{}
+	return nil
+}
 
 func (a multiagent) slice() []string {
 	s := make([]string, 0, len(a))
