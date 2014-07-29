@@ -142,6 +142,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 	context := "(no additional context provided)"
 	switch schedulingSignal {
 	case signalScheduleSuccessful:
+		incSignalScheduleSuccessful(1)
 		spec, exists := r.pendingSchedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
@@ -151,6 +152,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-schedule → scheduled: OK, on %s", containerID, spec.endpoint)
 
 	case signalScheduleFailed:
+		incSignalScheduleFailed(1)
 		spec, exists := r.pendingSchedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
@@ -159,6 +161,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-schedule → (deleted): schedule failed on %s", containerID, spec.endpoint)
 
 	case signalUnscheduleSuccessful:
+		incSignalUnscheduleSuccessful(1)
 		if _, exists := r.pendingUnschedule[containerID]; !exists {
 			panic("invalid state in scheduler registry")
 		}
@@ -166,6 +169,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-unschedule → (deleted): OK", containerID)
 
 	case signalUnscheduleFailed:
+		incSignalUnscheduleFailed(1)
 		spec, exists := r.pendingUnschedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
@@ -175,6 +179,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-unschedule → (deleted): unschedule failed on %s", containerID, spec.endpoint)
 
 	case signalContainerLost:
+		incSignalContainerLost(1)
 		spec, exists := r.scheduled[containerID]
 		if !exists {
 			context = fmt.Sprintf("%s lost, but it wasn't known to be scheduled: ignoring the signal", containerID)
@@ -187,6 +192,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s LOST → abandoned, on %s", containerID, spec.endpoint)
 
 	case signalAgentUnavailable:
+		incSignalAgentUnavailable(1)
 		if spec, exists := r.pendingSchedule[containerID]; exists {
 			delete(r.pendingSchedule, containerID)
 			context = fmt.Sprintf("%s pending-schedule → (deleted): agent (%s) unavailable", containerID, spec.endpoint)
@@ -198,6 +204,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		}
 
 	case signalContainerPutFailed:
+		incSignalContainerPutFailed(1)
 		spec, exists := r.pendingSchedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
@@ -206,6 +213,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-schedule → (deleted): container PUT failed on %s", containerID, spec.endpoint)
 
 	case signalContainerStartFailed:
+		incSignalContainerStartFailed(1)
 		spec, exists := r.pendingUnschedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
@@ -214,6 +222,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-schedule → (deleted): container start failed on %s", containerID, spec.endpoint)
 
 	case signalContainerStopFailed:
+		incSignalContainerStopFailed(1)
 		spec, exists := r.pendingUnschedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
@@ -223,6 +232,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		context = fmt.Sprintf("%s pending-unschedule → scheduled: container stop failed on %s", containerID, spec.endpoint)
 
 	case signalContainerDeleteFailed:
+		incSignalContainerDeleteFailed(1)
 		spec, exists := r.pendingUnschedule[containerID]
 		if !exists {
 			panic("invalid state in scheduler registry")
