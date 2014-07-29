@@ -38,6 +38,7 @@ func newAPI(r *registry) *api {
 	mux.Post("/containers/:id/heartbeat", http.HandlerFunc(api.handleHeartbeat))
 	mux.Post("/containers/:id/start", http.HandlerFunc(api.handleStart))
 	mux.Post("/containers/:id/stop", http.HandlerFunc(api.handleStop))
+	mux.Post("/containers/:id/restart", http.HandlerFunc(api.handleRestart))
 	mux.Get("/containers", http.HandlerFunc(api.handleList))
 
 	mux.Get("/resources", http.HandlerFunc(api.handleResources))
@@ -146,6 +147,25 @@ func (a *api) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := container.Start(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (a *api) handleRestart(w http.ResponseWriter, r *http.Request) {
+	var (
+		id = r.URL.Query().Get(":id")
+	)
+
+	container, ok := a.registry.Get(id)
+	if !ok {
+		http.Error(w, "", http.StatusNotFound)
+		return
+	}
+
+	if err := container.Restart(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
