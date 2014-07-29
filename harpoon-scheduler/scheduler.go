@@ -91,6 +91,7 @@ func (s *basicScheduler) loop(
 	for {
 		select {
 		case req := <-s.scheduleRequests:
+			incScheduleReqs(1)
 			taskSpecMap, err := placeJob(req.job, algoFactory(agentStater.agentStates()))
 			if err != nil {
 				req.resp <- err
@@ -100,6 +101,7 @@ func (s *basicScheduler) loop(
 			req.resp <- schedule(taskSpecMap, registryPublic)
 
 		case req := <-s.migrateRequests:
+			incMigrateReqs(1)
 			log.Printf("scheduler: migrate %s", req.existingJob.JobName)
 			artifactURL, err := getArtifactURL(req.existingJob)
 			if err != nil {
@@ -115,11 +117,13 @@ func (s *basicScheduler) loop(
 			)
 
 		case req := <-s.unscheduleRequests:
+			incUnscheduleReqs(1)
 			taskSpecMap := findJob(req.job, agentStater)
 			log.Printf("scheduler: unschedule %q: %d taskSpec(s)", req.job.JobName, len(taskSpecMap))
 			req.resp <- unschedule(taskSpecMap, registryPublic)
 
 		case m := <-lost:
+			incLost(len(m))
 			log.Printf("scheduler: LOST: %v (TODO: something with this)", m)
 
 		case q := <-s.quit:
@@ -146,6 +150,7 @@ func placeJob(job scheduler.Job, placeContainer schedulingAlgorithm) (map[string
 			}
 		}
 	}
+	incPlaced(len(m))
 	return m, nil
 }
 
