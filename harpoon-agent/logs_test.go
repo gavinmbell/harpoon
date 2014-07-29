@@ -33,7 +33,7 @@ func TestLastRetrievesLastLogLines(t *testing.T) {
 	ls := NewLogSet(3)
 	cid := ContainerID(1)
 	ls.receiveLogLine(cid, "m1")
-	ExpectArraysAreEqual(t, ls.Last(cid, 1), []string{"m1"})
+	ExpectArraysEqual(t, ls.Last(cid, 1), []string{"m1"})
 }
 
 func TestMessagesAreRoutedToTheCorrectContainers(t *testing.T) {
@@ -42,8 +42,8 @@ func TestMessagesAreRoutedToTheCorrectContainers(t *testing.T) {
 	cid2 := ContainerID(2)
 	ls.receiveLogLine(cid1, "m1")
 	ls.receiveLogLine(cid2, "j1")
-	ExpectArraysAreEqual(t, ls.Last(cid1, 1), []string{"m1"})
-	ExpectArraysAreEqual(t, ls.Last(cid2, 1), []string{"j1"})
+	ExpectArraysEqual(t, ls.Last(cid1, 1), []string{"m1"})
+	ExpectArraysEqual(t, ls.Last(cid2, 1), []string{"j1"})
 }
 
 func _TestListenersRecieveMessages(t *testing.T) {
@@ -129,12 +129,12 @@ func TestListenersFollowOnlyRequestedContainer(t *testing.T) {
 }
 
 func ExpectMessage(t *testing.T, logSink chan string, expected string) {
-	var msg string;
+	var msg string
 	select {
-	case msg = <- logSink:
+	case msg = <-logSink:
 		// Don't block test suite, while conveniently forcing a context switch so that the
 		// results have time to propogate.
-	case <- time.After(time.Millisecond):
+	case <-time.After(time.Millisecond):
 		t.Errorf("Nothing received")
 	}
 	if msg != expected {
@@ -157,69 +157,69 @@ func ExpectNoMessage(t *testing.T, logSink chan string) {
 
 // Test RingBuffer
 func TestEmptyRingBufferHasNoLastElements(t *testing.T) {
-	rb := NewRingBuffer(3);
-	ExpectArraysAreEqual(t, rb.Last(2), []string{})
+	rb := NewRingBuffer(3)
+	ExpectArraysEqual(t, rb.Last(2), []string{})
 }
 
 func TestRingBufferWithSomethingReturnsSomething(t *testing.T) {
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
-	ExpectArraysAreEqual(t, rb.Last(1), []string{"m1"})
+	ExpectArraysEqual(t, rb.Last(1), []string{"m1"})
 }
 
 func TestRingBufferOnlyReturnsNumberOfResultsPresent(t *testing.T) {
 	// Checks that nil was used to limit number returned.
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
-	ExpectArraysAreEqual(t, rb.Last(2), []string{"m1"})
+	ExpectArraysEqual(t, rb.Last(2), []string{"m1"})
 }
 
 func TestLastOnlyReturnsTheRequestedNumberOfElements(t *testing.T) {
 	// Checks that index was used to limit number returned.
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
 	rb.Insert("m2")
-	ExpectArraysAreEqual(t, rb.Last(1), []string{"m2"})
+	ExpectArraysEqual(t, rb.Last(1), []string{"m2"})
 }
 
 func TestLastReturnsResultsFromOldestToNewest(t *testing.T) {
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
 	rb.Insert("m2")
-	ExpectArraysAreEqual(t, rb.Last(2), []string{"m1", "m2"})
+	ExpectArraysEqual(t, rb.Last(2), []string{"m1", "m2"})
 }
 
 func TestRingBufferWithCapacityNReallyHoldsNRecords(t *testing.T) {
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
 	rb.Insert("m2")
 	rb.Insert("m3")
-	ExpectArraysAreEqual(t, rb.Last(3), []string{"m1", "m2", "m3"})
+	ExpectArraysEqual(t, rb.Last(3), []string{"m1", "m2", "m3"})
 }
 
 func TestRingBufferWithCapacityNReallyHoldsOnlyNRecords(t *testing.T) {
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
 	rb.Insert("m2")
 	rb.Insert("m3")
 	rb.Insert("m4")
-	ExpectArraysAreEqual(t, rb.Last(3), []string{"m2", "m3", "m4"})
+	ExpectArraysEqual(t, rb.Last(3), []string{"m2", "m3", "m4"})
 }
 
 func TestLastLimitsRetrievalToTheRingBufferSize(t *testing.T) {
-	rb := NewRingBuffer(3);
+	rb := NewRingBuffer(3)
 	rb.Insert("m1")
 	rb.Insert("m2")
 	rb.Insert("m3")
 	rb.Insert("m4")
-	ExpectArraysAreEqual(t, rb.Last(4), []string{"m2", "m3", "m4"})
+	ExpectArraysEqual(t, rb.Last(4), []string{"m2", "m3", "m4"})
 }
 
 func TestReverse(t *testing.T) {
-	ExpectArraysAreEqual(t, reverse([]string{}), []string{})
-    ExpectArraysAreEqual(t, reverse([]string{"1"}), []string{"1"})
-	ExpectArraysAreEqual(t, reverse([]string{"1", "2"}), []string{"2", "1"})
-	ExpectArraysAreEqual(t, reverse([]string{"1", "2", "3"}), []string{"3", "2", "1"})
+	ExpectArraysEqual(t, reverse([]string{}), []string{})
+	ExpectArraysEqual(t, reverse([]string{"1"}), []string{"1"})
+	ExpectArraysEqual(t, reverse([]string{"1", "2"}), []string{"2", "1"})
+	ExpectArraysEqual(t, reverse([]string{"1", "2", "3"}), []string{"3", "2", "1"})
 }
 
 func TestMin(t *testing.T) {
@@ -228,7 +228,7 @@ func TestMin(t *testing.T) {
 	ExpectEqual(t, min(1, 1), 1)
 }
 
-func ExpectArraysAreEqual(t *testing.T, x []string, y []string) {
+func ExpectArraysEqual(t *testing.T, x []string, y []string) {
 	if !reflect.DeepEqual(x, y) {
 		t.Errorf("%q != %q", x, y)
 	}
@@ -239,4 +239,3 @@ func ExpectEqual(t *testing.T, x int, y int) {
 		t.Errorf("%q != %q", x, y)
 	}
 }
-
