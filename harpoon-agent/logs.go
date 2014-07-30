@@ -11,61 +11,52 @@ package main
 import (
 	"container/ring"
 	"log"
-	"math"
 	"net"
 	"regexp"
 	"sync"
 )
 
-// ListenerID is an opaque identifier for a channel which
-// receives log message updates from a given container. This is
-// guaranteed to be unique to a given ContainerID.
-type ListenerID int32
-
 type containerLog struct {
-	entries        *RingBuffer
-	listeners      map[ListenerID]chan string
-	nextListenerID ListenerID
+	entries   *RingBuffer
+	listeners map[chan string]struct{}
 
-	addc	       chan logAdd
-	lastc          chan logLast
-	listenc        chan logListen
-	unlistenc      chan logUnlisten
-	quitc          chan struct{}
+	addc      chan logAdd
+	lastc     chan logLast
+	listenc   chan logListen
+	unlistenc chan logUnlisten
+	quitc     chan struct{}
 }
 
 func NewContainerLog(bufferSize int) *containerLog {
 	cl := &containerLog{
-		entries:        NewRingBuffer(bufferSize),
-		listeners:      make(map[ListenerID]chan string),
-		nextListenerID: 1,
+		entries:   NewRingBuffer(bufferSize),
+		listeners: make(map[chan string]struct{}),
 
-		addc:       	make(chan logAdd),
-		lastc:          make(chan logLast),
-		listenc:        make(chan logListen),
-		unlistenc:      make(chan logUnlisten),
-		quitc:          make(chan struct{}),
+		addc:      make(chan logAdd),
+		lastc:     make(chan logLast),
+		listenc:   make(chan logListen),
+		unlistenc: make(chan logUnlisten),
+		quitc:     make(chan struct{}),
 	}
 	go cl.loop()
 	return cl
 }
 
 type logAdd struct {
-	logLine     string      // supplied by caller
+	logLine string // supplied by caller
 }
 
 type logLast struct {
-	count       int           // supplied by caller
-	last        chan []string // passes result to caller
+	count int           // supplied by caller
+	last  chan []string // passes result to caller
 }
 
 type logListen struct {
-	logSink          chan string     // supplied by caller
-	listenerIDResult chan ListenerID // passes result to caller
+	logSink chan string // supplied by caller
 }
 
 type logUnlisten struct {
-	listenerID  ListenerID  // supplied by caller
+	logSink chan string // supplied by caller
 }
 
 // AddLogLine feeds a log entry into a log buffer and notifies all listeners.
@@ -89,7 +80,7 @@ func (cl *containerLog) AddLogLine(logLine string) {
 func (cl *containerLog) Last(n int) []string {
 	msg := logLast{count: n, last: make(chan []string)}
 	cl.lastc <- msg
-	return <- msg.last
+	return <-msg.last
 }
 
 // Listen subscribes a listener to a container.  New log lines to the subscribed container
@@ -98,21 +89,18 @@ func (cl *containerLog) Last(n int) []string {
 // rain.
 //
 // The caller can subsequently use the ListenerID to remove the subscription.
-func (cl *containerLog) Listen(logSink chan string) ListenerID {
-	msg := logListen{logSink: logSink, listenerIDResult: make(chan ListenerID)}
-	cl.listenc <- msg
-	return <- msg.listenerIDResult
+func (cl *containerLog) Listen(logSink chan string) {
+	cl.listenc <- logListen{logSink: logSink}
 }
 
 // Unlisten removes a listener from a container's log.  The ListenerID was
 // obtained when the client called Listen().
-func (cl *containerLog) Unlisten(listenerID ListenerID) {
-	cl.unlistenc <- logUnlisten{listenerID: listenerID}
+func (cl *containerLog) Unlisten(logSink chan string) {
+	cl.unlistenc <- logUnlisten{logSink: logSink}
 }
 
 // Exit causes cleans out all the listeners and terminates the loop()
 func (cl *containerLog) Exit() {
-	cl.removeListeners()
 	close(cl.quitc)
 }
 
@@ -120,15 +108,15 @@ func (cl *containerLog) Exit() {
 func (cl *containerLog) loop() {
 	for {
 		select {
-		case msg := <- cl.addc:
+		case msg := <-cl.addc:
 			cl.insert(msg.logLine)
-		case msg := <- cl.lastc:
+		case msg := <-cl.lastc:
 			msg.last <- cl.entries.Last(msg.count)
-		case msg := <- cl.listenc:
-			msg.listenerIDResult <- cl.addListener(msg.logSink)
-		case msg := <- cl.unlistenc:
-			cl.removeListener(msg.listenerID)
-		case <- cl.quitc:
+		case msg := <-cl.listenc:
+			cl.addListener(msg.logSink)
+		case msg := <-cl.unlistenc:
+			cl.removeListener(msg.logSink)
+		case <-cl.quitc:
 			cl.removeListeners()
 			return
 		}
@@ -139,7 +127,7 @@ func (cl *containerLog) loop() {
 func (cl *containerLog) insert(logLine string) {
 	cl.entries.Insert(logLine)
 	// Send the logLine to all listeners, skipping those who have blocked channels
-	for _, logSink := range cl.listeners {
+	for logSink := range cl.listeners {
 		select {
 		case logSink <- logLine:
 			// Message sent successfully
@@ -150,28 +138,22 @@ func (cl *containerLog) insert(logLine string) {
 }
 
 // addListener adds a listener
-func (cl *containerLog) addListener(logSink chan string) ListenerID {
-	if cl.nextListenerID == math.MaxInt32 {
-		panic("Whoooaaa we've had 2^32 listeners.")
-	}
-	listenerID := cl.nextListenerID
-	cl.listeners[listenerID] = logSink
-	cl.nextListenerID++
-	return listenerID
+func (cl *containerLog) addListener(logSink chan string) {
+	cl.listeners[logSink] = struct{}{}
 }
 
 // removeLister removes listenerID from the set of listeners
-func (cl *containerLog) removeListener(listenerID ListenerID) {
-	logSink, ok := cl.listeners[listenerID]
+func (cl *containerLog) removeListener(logSink chan string) {
+	_, ok := cl.listeners[logSink]
 	if !ok {
 		return
 	}
 	close(logSink)
-	delete(cl.listeners, listenerID)
+	delete(cl.listeners, logSink)
 }
 
 // removeListeners removes all listeners
-func (cl* containerLog) removeListeners() {
+func (cl *containerLog) removeListeners() {
 	for listenerID := range cl.listeners {
 		cl.removeListener(listenerID)
 	}
@@ -275,7 +257,6 @@ func reverse(x []string) []string {
 func min(x int, y int) int {
 	if x < y {
 		return x
-	} else {
-		return y
 	}
+	return y
 }

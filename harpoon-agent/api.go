@@ -237,13 +237,9 @@ func isStreamAccept(accept string) bool {
 }
 
 func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
-	e := json.NewEncoder(w)
-
-	e.Encode(a.registry.Instances().EventBody())
-
 	var (
-		id = r.URL.Query().Get(":id")
-		rawHistory  = r.URL.Query().Get("history")
+		id         = r.URL.Query().Get(":id")
+		rawHistory = r.URL.Query().Get("history")
 	)
 
 	if rawHistory == "" {
@@ -264,8 +260,8 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 
 	if isStreamAccept(r.Header.Get("Accept")) {
 		logLines := make(chan string, 2000)
-		listenerID := container.logs.Listen(logLines)
-		defer container.logs.Unlisten(listenerID)
+		container.logs.Listen(logLines)
+		defer container.logs.Unlisten(logLines)
 		for line := range logLines {
 			_, err := w.Write([]byte(line))
 			if err != nil {
