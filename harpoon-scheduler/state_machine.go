@@ -64,12 +64,10 @@ func (s *stateMachine) stop() {
 
 func (s *stateMachine) loop(
 	endpoint string,
-	containerEvents <-chan agent.ContainerEvent,
-	eventStopper agent.Stopper,
+	statec <-chan []agent.ContainerInstance,
+	stopper agent.Stopper,
 ) {
-	defer func() {
-		eventStopper.Stop()
-	}()
+	defer stopper.Stop()
 
 	m := map[string]agent.ContainerInstance{} // ID: instance
 	updateWith := func(containerInstance agent.ContainerInstance) {
@@ -93,37 +91,22 @@ func (s *stateMachine) loop(
 
 	for {
 		select {
-		case containerEvent, ok := <-containerEvents:
+		case containerInstances, ok := <-statec:
 			incContainerEventsReceived(1)
 			if !ok {
 				log.Printf("state machine: %s: container events chan closed", endpoint)
 				log.Printf("state machine: %s: TODO: re-establish connection", endpoint)
 				// Note to self: use streadway's channel-of-channels idiom to
 				// accomplish connection maintenance.
-				containerEvents = nil // TODO re-establish connection, instead of this
-				dirty = true          // TODO and some way to reset that
+				statec = nil // TODO re-establish connection, instead of this
+				dirty = true // TODO and some way to reset that
 				continue
 			}
-
-			switch containerEvent.EventName() {
-			case agent.ContainerInstancesEventName:
-				containerInstances, ok := containerEvent.(agent.ContainerInstances)
-				if !ok {
-					panic("impossible")
-				}
-				log.Printf("state machine: %s: initial 'containers' reveals %d running task instance(s)", endpoint, len(containerInstances))
-				for _, containerInstance := range containerInstances {
-					updateWith(containerInstance)
-				}
-				dirty = false
-
-			case agent.ContainerInstanceEventName:
-				containerInstance, ok := containerEvent.(agent.ContainerInstance)
-				if !ok {
-					panic("impossible")
-				}
+			log.Printf("state machine: %s: state update: %d task instance(s)", endpoint, len(containerInstances))
+			for _, containerInstance := range containerInstances {
 				updateWith(containerInstance)
 			}
+			dirty = false
 
 		case c := <-s.dirtyRequests:
 			c <- dirty

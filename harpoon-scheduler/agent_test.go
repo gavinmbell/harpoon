@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -105,7 +104,7 @@ func demux(in <-chan map[string]agent.ContainerInstance, mux *sync.RWMutex, out 
 	}
 }
 
-func (c *mockAgent) getContainerInstances() agent.ContainerInstances {
+func (c *mockAgent) getContainerInstances() []agent.ContainerInstance {
 	defer atomic.AddInt32(&c.getContainerCount, 1)
 	c.RLock()
 	defer c.RUnlock()
@@ -129,63 +128,7 @@ func (c *mockAgent) getContainerEvents(w http.ResponseWriter, r *http.Request, p
 	log.Printf("mockAgent getContainerEvents: stream started")
 	defer log.Printf("mockAgent getContainerEvents: stream stopped")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		panic("ResponseWriter not Flusher")
-	}
-
-	if err := mockWriteContainerStreamEvent(w, agent.ContainerInstancesEventName, c.getContainerInstances()); err != nil {
-		log.Printf("mockAgent getContainerEvents: encountered error when writing first event: %s", err)
-		return
-	}
-	flusher.Flush()
-
-	closeNotifier, ok := w.(http.CloseNotifier)
-	if !ok {
-		panic("ResponseWriter not CloseNotifier")
-	}
-	notifyClose := closeNotifier.CloseNotify()
-
-	changes := make(chan map[string]agent.ContainerInstance)
-	func() {
-		c.Lock()
-		defer c.Unlock()
-		c.changesOut[r.RemoteAddr] = changes
-	}()
-	defer func() {
-		c.Lock()
-		defer c.Unlock()
-		delete(c.changesOut, r.RemoteAddr)
-	}()
-
-	for {
-		select {
-		case change := <-changes:
-			for _, containerInstance := range change {
-				if err := mockWriteContainerStreamEvent(w, agent.ContainerInstanceEventName, containerInstance); err != nil {
-					log.Printf("mockAgent getContainerEvents: encountered error when writing event: %s", err)
-					return
-				}
-				flusher.Flush()
-			}
-		case <-notifyClose:
-			log.Printf("mockAgent getContainerEvents: HTTP request was closed")
-			return
-		}
-	}
-}
-
-func mockWriteContainerStreamEvent(w io.Writer, eventName string, v interface{}) error {
-	if _, err := fmt.Fprintf(w, "%s\n", eventName); err != nil {
-		return err
-	}
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "\n"); err != nil {
-		return err
-	}
-	return nil
+	writeError(w, http.StatusNotImplemented, fmt.Errorf("not yet implemented"))
 }
 
 func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
