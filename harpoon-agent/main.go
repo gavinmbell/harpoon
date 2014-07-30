@@ -29,9 +29,6 @@ func init() {
 }
 
 func main() {
-	ls := NewLogSet(10000)
-	ls.receiveLogs()
-
 	flag.Int64Var(&agentTotalCPU, "cpu", -1, "available cpu resourcesx (-1 to use all cpus)")
 	flag.Int64Var(&agentTotalMem, "mem", -1, "available memory resources in MB (-1 to use all)")
 	flag.Var(&configuredVolumes, "v", "repeatable list of available volumes")
@@ -52,9 +49,10 @@ func main() {
 
 	var (
 		r   = newRegistry()
-		api = newAPI(r, ls)
+		api = newAPI(r)
 	)
 
+	receiveLogs(r)
 	http.Handle("/", api)
 
 	go func() {

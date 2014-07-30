@@ -18,19 +18,17 @@ import (
 type api struct {
 	http.Handler
 	registry *registry
-	logSet *LogSet
 
 	enabled bool
 	sync.RWMutex
 }
 
-func newAPI(r *registry, ls *LogSet) *api {
+func newAPI(r *registry) *api {
 	var (
 		mux = pat.New()
 		api = &api{
 			Handler:  mux,
 			registry: r,
-			logSet: ls,
 		}
 	)
 
@@ -172,7 +170,6 @@ func (a *api) handleDestroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.logSet.Remove(ContainerID(id))
 	a.registry.Remove(id)
 
 	w.WriteHeader(http.StatusNoContent)
@@ -245,20 +242,20 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		id = r.URL.Query().Get(":id")
-		raw_history  = r.URL.Query().Get("history")
+		rawHistory  = r.URL.Query().Get("history")
 	)
 
 	if raw_history == "" {
-		raw_history = "10"
+		rawHistory = "10"
 	}
 
-	_, ok := a.registry.Get(id)
+	container, ok := a.registry.Get(id)
 	if !ok {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
 
-	history, err := strconv.Atoi(raw_history)
+	history, err := strconv.Atoi(rawHistory)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -266,7 +263,8 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 
 	if isStreamAccept(r.Header.Get("Accept")) {
 		logLines := make(chan string, 2000)
-		a.logSet.Listen(ContainerID(id), logLines)
+		listenerID := container.logs.Listen(logLines)
+		defer container.logs.Unlisten(listenerID)
 		for line := range logLines {
 			_, err := w.Write([]byte(line))
 			if err != nil {
@@ -276,7 +274,7 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, line := range a.logSet.Last(ContainerID(id), history) {
+	for _, line := range container.logs.Last(history) {
 		_, err := w.Write([]byte(line))
 		if err != nil {
 			return

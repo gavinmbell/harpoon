@@ -1,14 +1,7 @@
 package main
 
 /*
- Provides log management.
-
- At the highest level there is a LogSet.  A LogSet consists of containerLogs.  Each containerLog
- has a RingBuffer to hold log lines.
-
- Applications interact with the LogSet. The log set provides high level opertaions mirroring
- those provided by the message.  It provides synchronization.  It dispatches opertions to
- the appropriate containerLog based on the ContainerID.
+ Provide log management for containers.
 
  containerLogs implement log buffering, listening, and log retrieval for a single
  container.
@@ -23,30 +16,125 @@ import (
 	"sync"
 )
 
-// ContainerID is an opaque identifier for a container
-type ContainerID string
-
 // ListenerID is an opaque identifier for a channel which
 // receives log message updates from a given container. This is
 // guaranteed to be unique to a given ContainerID.
 type ListenerID int32
 
 type containerLog struct {
-	containerID    ContainerID
 	entries        *RingBuffer
 	listeners      map[ListenerID]chan string
 	nextListenerID ListenerID
+
+	addc	       chan logAdd
+	lastc          chan logLast
+	listenc        chan logListen
+	unlistenc      chan logUnlisten
+	quitc          chan struct{}
 }
 
-func newContainerLog(containerID ContainerID, bufferSize int) *containerLog {
-	return &containerLog{
-		containerID:    containerID,
+func NewContainerLog(bufferSize int) *containerLog {
+	cl := &containerLog{
 		entries:        NewRingBuffer(bufferSize),
 		listeners:      make(map[ListenerID]chan string),
 		nextListenerID: 1,
+
+		addc:       	make(chan logAdd),
+		lastc:          make(chan logLast),
+		listenc:        make(chan logListen),
+		unlistenc:      make(chan logUnlisten),
+		quitc:          make(chan struct{}),
+	}
+	go cl.loop()
+	return cl
+}
+
+type logAdd struct {
+	logLine     string      // supplied by caller
+}
+
+type logLast struct {
+	count       int           // supplied by caller
+	last        chan []string // passes result to caller
+}
+
+type logListen struct {
+	logSink          chan string     // supplied by caller
+	listenerIDResult chan ListenerID // passes result to caller
+}
+
+type logUnlisten struct {
+	listenerID  ListenerID  // supplied by caller
+}
+
+// AddLogLine feeds a log entry into a log buffer and notifies all listeners.
+//
+// METRICS:
+//  # number lines received
+//  # number log lines flushed
+//  # of notifications delivered
+//  # number notifications dropped
+//
+// NOTES:
+//  If the number of dropped notifications goes up then a listener is not consuming
+//  notifications fast enough.  Look for a stalled listener.
+func (cl *containerLog) AddLogLine(logLine string) {
+	cl.addc <- logAdd{logLine: logLine}
+}
+
+// Last retrieves the n last log lines from containerID, returning them in
+// the order from oldest to newest, i.e. []string{oldest, newer, ..., newest}.
+// The call is is idempotent.
+func (cl *containerLog) Last(n int) []string {
+	msg := logLast{count: n, last: make(chan []string)}
+	cl.lastc <- msg
+	return <- msg.last
+}
+
+// Listen subscribes a listener to a container.  New log lines to the subscribed container
+// are set to all of its listeners via their supplied logSink channels.  A logSink does
+// receive messages while it is blocked.  All of those messages are lost like tears in the
+// rain.
+//
+// The caller can subsequently use the ListenerID to remove the subscription.
+func (cl *containerLog) Listen(logSink chan string) ListenerID {
+	msg := logListen{logSink: logSink, listenerIDResult: make(chan ListenerID)}
+	cl.listenc <- msg
+	return <- msg.listenerIDResult
+}
+
+// Unlisten removes a listener from a container's log.  The ListenerID was
+// obtained when the client called Listen().
+func (cl *containerLog) Unlisten(listenerID ListenerID) {
+	cl.unlistenc <- logUnlisten{listenerID: listenerID}
+}
+
+// Exit causes cleans out all the listeners and terminates the loop()
+func (cl *containerLog) Exit() {
+	cl.removeListeners()
+	close(cl.quitc)
+}
+
+// loop processes incoming commands
+func (cl *containerLog) loop() {
+	for {
+		select {
+		case msg := <- cl.addc:
+			cl.insert(msg.logLine)
+		case msg := <- cl.lastc:
+			msg.last <- cl.entries.Last(msg.count)
+		case msg := <- cl.listenc:
+			msg.listenerIDResult <- cl.addListener(msg.logSink)
+		case msg := <- cl.unlistenc:
+			cl.removeListener(msg.listenerID)
+		case <- cl.quitc:
+			cl.removeListeners()
+			return
+		}
 	}
 }
 
+// insert a log line into the buffer and notifies listeners
 func (cl *containerLog) insert(logLine string) {
 	cl.entries.Insert(logLine)
 	// Send the logLine to all listeners, skipping those who have blocked channels
@@ -60,6 +148,7 @@ func (cl *containerLog) insert(logLine string) {
 	}
 }
 
+// addListener adds a listener
 func (cl *containerLog) addListener(logSink chan string) ListenerID {
 	if cl.nextListenerID == math.MaxInt32 {
 		panic("Whoooaaa we've had 2^32 listeners.")
@@ -70,46 +159,26 @@ func (cl *containerLog) addListener(logSink chan string) ListenerID {
 	return listenerID
 }
 
-func (cl* containerLog) removeListeners() {
-	for listenerID, logSink := range cl.listeners {
-		close(logSink)
-		delete(cl.listeners, listenerID)
+// removeLister removes listenerID from the set of listeners
+func (cl *containerLog) removeListener(listenerID ListenerID) {
+	logSink, ok := cl.listeners[listenerID]
+	if !ok {
+		return
 	}
-}
-
-func (cl *containerLog) dropListener(listenerID ListenerID) {
+	close(logSink)
 	delete(cl.listeners, listenerID)
 }
 
-// LogSet stores log records for many containers. Logs are fed into the LogSet and
-// then retrieved.  The logs are stored in circular buffers on a per-container basis.
-// Once a buffer for a container fills the oldest log elements are discarded to make
-// room for new ones.
-type LogSet struct {
-	logs                map[ContainerID]*containerLog
-	bufferSize          int
-}
-
-// NewLogSet creates a LogSet.  All containers will have log buffers of
-// bufferSize messages.  Launches message processing loop.
-func NewLogSet(bufferSize int) *LogSet {
-	ls := &LogSet{
-		logs:					map[ContainerID]*containerLog{},
-		bufferSize:				bufferSize,
-		receiveMsgs:			make(chan *logSetReceiveMsg),
-		lastMsgs:				make(chan *logSetLastMsg),
-		listenMsgs:				make(chan *logSetListenMsg),
-		removeContainerMsgs:  	make(chan *logSetRemoveContainerMsg),
-		dropListenerMsgs:		make(chan *logSetDropListenerMsg),
-		exitMsgs:         		make(chan *logSetExitMsg),
+// removeListeners removes all listeners
+func (cl* containerLog) removeListeners() {
+	for listenerID := range cl.listeners {
+		cl.removeListener(listenerID)
 	}
-	go ls.loop()
-	return ls
 }
 
 // receiveLogs opens udp port 3334, listens for incoming log messages, and then
 // feeds these into the appropriate buffers.
-func (ls *LogSet) receiveLogs() {
+func receiveLogs(r *registry) {
 	laddr, err := net.ResolveUDPAddr("udp", ":3334")
 	if err != nil {
 		log.Fatal(err)
@@ -130,126 +199,14 @@ func (ls *LogSet) receiveLogs() {
 			return
 		}
 
-		ls.receiveLogLine(ContainerID(addr.String()), string(buf[:n]))
-		log.Printf("LOG: %s : %s", addr, buf[:n])
-	}
-}
-
-// Messages sent.
-type logSetReceiveMsg struct {
-	containerID ContainerID // supplied by caller
-	logLine     string      // supplied by caller
-}
-
-type logSetLastMsg struct {
-	containerID ContainerID   // supplied by caller
-	count       int           // supplied by caller
-	last        chan []string // passes result to caller
-}
-
-type logSetListenMsg struct {
-	containerID      ContainerID     // supplied by caller
-	logSink          chan string     // supplied by caller
-	listenerIDResult chan ListenerID // passes result to caller
-}
-
-type logSetDropListenerMsg struct {
-	containerID ContainerID // supplied by caller
-	listenerID  ListenerID  // supplied by caller
-}
-
-type logSetRemoveContainerMsg struct {
-	containerID ContainerID // supplied by caller
-}
-
-type logSetExitMsg struct {
-	containerID ContainerID // supplied by caller
-}
-
-// receiveLogLine feeds a log entry into a container's log buffer.
-//
-// METRICS:
-//  # number lines received
-//  # number log lines flushed
-//  # of notifications delivered
-//  # number notifications dropped
-//
-// NOTES:
-//  If the number of dropped notifications goes up then a listener is not consuming
-//  notifications fast enough.  Look for a stalled listener.
-func (ls *LogSet) receiveLogLine(containerID ContainerID, logLine string) {
-	ls.receiveMsgs <- &logSetReceiveMsg{containerID: containerID, logLine: logLine}
-}
-
-// Last retrieves the n last log lines from containerID, returning them in
-// the order from oldest to newest, i.e. []string{oldest, newer, ..., newest}.
-// The call is is idempotent.
-func (ls *LogSet) Last(containerID ContainerID, n int) []string {
-	last := make(chan []string)
-	ls.lastMsgs <- &logSetLastMsg{containerID: containerID, count: n, last: last}
-	return <-last
-}
-
-// Listen subscribes a listener to a container.  New log lines to the subscribed container
-// are set to all of its listeners via their supplied logSink channels.  A logSink does
-// receive messages while it is blocked.  All of those messages are lost like tears in the
-// rain.
-//
-// The caller can subsequently use the ListenerID to remove the subscription.
-func (ls *LogSet) Listen(containerID ContainerID, logSink chan string) ListenerID {
-	msg := &logSetListenMsg{
-		containerID:      containerID,
-		logSink:          logSink,
-		listenerIDResult: make(chan ListenerID)}
-	ls.listenMsgs <- msg
-	return <-msg.listenerIDResult
-}
-
-func (ls *LogSet) Remove(containerID ContainerID) {
-	ls.removeContainerMsgs <- &logSetRemoveContainerMsg{containerID}
-}
-
-// DropListener removes a listener from a container's log.  The ListenerID was
-// obtained when the client called Listen().
-func (ls *LogSet) DropListener(containerID ContainerID, listenerID ListenerID) {
-	ls.dropListenerMsgs <- &logSetDropListenerMsg{containerID: containerID, listenerID: listenerID}
-}
-
-// Exit causes the LogSet's loop() to terminate.
-func (ls *LogSet) Exit() {
-	ls.exitMsgs <- &logSetExitMsg{}
-}
-
-// Processes messages one at a time
-func (ls *LogSet) loop() {
-	for {
-		select {
-		case msg := <-ls.receiveMsgs:
-			ls.getContainerLog(msg.containerID).insert(msg.logLine)
-		case msg := <-ls.lastMsgs:
-			msg.last <- ls.getContainerLog(msg.containerID).entries.Last(msg.count)
-		case msg := <-ls.listenMsgs:
-			msg.listenerIDResult <- ls.getContainerLog(msg.containerID).addListener(msg.logSink)
-		case msg := <- ls.removeContainerMsgs:
-			ls.getContainerLog(msg.containerID).removeListeners()
-			delete(ls.logs, msg.containerID)
-		case msg := <-ls.dropListenerMsgs:
-			delete(ls.getContainerLog(msg.containerID).listeners, msg.listenerID)
-		case <-ls.exitMsgs:
-			return
+		container, ok := r.Get(addr.String())
+		if ok {
+			container.logs.AddLogLine(string(buf[:n]))
+			log.Printf("LOG: %s : %s", addr, buf[:n])
+		} else {
+			log.Printf("LOG: Message to unknown container %s : %s", addr, buf[:n])
 		}
 	}
-}
-
-// getContainerLog gets the existing containerLog for the specified ContainerID or creates
-// a new one if it does not exist yet as a side effect.
-func (ls *LogSet) getContainerLog(containerID ContainerID) *containerLog {
-	x, ok := ls.logs[containerID]
-	if !ok {
-		x = newContainerLog(containerID, ls.bufferSize)
-		ls.logs[containerID] = x
-	}
-	return x
 }
 
 // RingBuffer that allows you to retrieve the last n records.  Retrieval calls are idempotent.

@@ -30,6 +30,7 @@ type container struct {
 	config       *libcontainer.Config
 	desired      string
 	downDeadline time.Time
+	logs         *containerLog
 
 	subscribers map[chan<- agent.ContainerInstance]struct{}
 
@@ -47,6 +48,7 @@ func newContainer(id string, config agent.ContainerConfig) *container {
 			Status: agent.ContainerStatusStarting,
 			Config: config,
 		},
+		logs:           NewContainerLog(10000),
 		subscribers:    map[chan<- agent.ContainerInstance]struct{}{},
 		actionRequestc: make(chan actionRequest),
 		hbRequestc:     make(chan heartbeatRequest),
@@ -155,6 +157,7 @@ func (c *container) loop() {
 		case ch := <-c.unsubc:
 			delete(c.subscribers, ch)
 		case <-c.quitc:
+			c.logs.Exit()
 			return
 		}
 	}
