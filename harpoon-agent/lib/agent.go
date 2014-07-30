@@ -176,14 +176,7 @@ type Stopper interface {
 // ContainerEvent is anything that comes over the Events stream. Clients may
 // use the EventName to type-assert to a specific concrete event type.
 type ContainerEvent interface {
-	EventBody() ContainerEventBody
 	EventName() string
-}
-
-// ContainerEventBody will be encoded in the event stream.
-type ContainerEventBody struct {
-	Event string      `json:"event"`
-	Self  interface{} `json:"self"`
 }
 
 const (
@@ -218,14 +211,6 @@ type ContainerInstance struct {
 	Config ContainerConfig `json:"config"`
 }
 
-// EventBody satisfies the ContainerEvent interface.
-func (e ContainerInstance) EventBody() ContainerEventBody {
-	return ContainerEventBody{
-		Event: e.EventName(),
-		Self:  e,
-	}
-}
-
 // EventName satisfies the ContainerEvent interface.
 func (e ContainerInstance) EventName() string { return ContainerInstanceEventName }
 
@@ -233,14 +218,6 @@ func (e ContainerInstance) EventName() string { return ContainerInstanceEventNam
 // the event types that may be sent through the agent event stream, typically
 // as the first event.
 type ContainerInstances []ContainerInstance
-
-// EventBody satisfies the ContainerEvent interface.
-func (e ContainerInstances) EventBody() ContainerEventBody {
-	return ContainerEventBody{
-		Event: e.EventName(),
-		Self:  e,
-	}
-}
 
 // EventName satisfies the ContainerEvent interface.
 func (e ContainerInstances) EventName() string { return ContainerInstancesEventName }
