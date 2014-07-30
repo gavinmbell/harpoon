@@ -75,16 +75,14 @@ supply additional fields or metadata.
 
 [sse]: http://www.w3.org/TR/eventsource
 
-The first event is always `containers` (plural), with an array of every
-ContainerInstance in the agent. Subsequent events are `container` (singular),
-with the complete ContainerInstance of any container that changes state.
+Events are always JSON arrays containing ContainerInstances. The first event
+on every request contains every ContainerInstance in the agent. Subsequent
+events contain ContainerInstances for any container that changes state.
 
 ```
-event: containers
 data: [...]
 
-event: container
-data: {...}
+data: [...]
 ```
 
 ## GET /containers/{id}/log?history=10
