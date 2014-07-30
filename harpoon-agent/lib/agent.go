@@ -21,7 +21,7 @@ type Agent interface {
 	Replace(newContainerID, oldContainerID string) error                 // PUT /containers/{newID}?replace={oldID}
 	Delete(containerID string) error                                     // DELETE /containers/{id}
 	Containers() ([]ContainerInstance, error)                            // GET /containers
-	Events() (<-chan ContainerEvent, Stopper, error)                     // GET /containers with request header Accept: text/event-stream
+	Events() (<-chan []ContainerInstance, Stopper, error)                // GET /containers with request header Accept: text/event-stream
 	Log(containerID string, history int) (<-chan string, Stopper, error) // GET /containers/{id}/log?history=10
 	Resources() (HostResources, error)                                   // GET /resources
 }
@@ -169,25 +169,10 @@ type TotalReserved struct {
 }
 
 // Stopper describes anything that can be stopped, such as an event stream.
+// TODO(pb): it would be nice to use a different idiom, and delete this.
 type Stopper interface {
 	Stop()
 }
-
-// ContainerEvent is anything that comes over the Events stream. Clients may
-// use the EventName to type-assert to a specific concrete event type.
-type ContainerEvent interface {
-	EventName() string
-}
-
-const (
-	// ContainerInstanceEventName helps to satisfy the ContainerEvent
-	// interface for the ContainerInstance type.
-	ContainerInstanceEventName = "container"
-
-	// ContainerInstancesEventName helps to satisfy the ContainerEvent
-	// interface. for the ContainerInstances type.
-	ContainerInstancesEventName = "containers"
-)
 
 // ContainerInstance describes the state of an individual container running on
 // an agent machine. In scheduler terminology, it always describes one
@@ -210,17 +195,6 @@ type ContainerInstance struct {
 	Status ContainerStatus `json:"status"`
 	Config ContainerConfig `json:"config"`
 }
-
-// EventName satisfies the ContainerEvent interface.
-func (e ContainerInstance) EventName() string { return ContainerInstanceEventName }
-
-// ContainerInstances collects multiple ContainerInstance structs. It's one of
-// the event types that may be sent through the agent event stream, typically
-// as the first event.
-type ContainerInstances []ContainerInstance
-
-// EventName satisfies the ContainerEvent interface.
-func (e ContainerInstances) EventName() string { return ContainerInstancesEventName }
 
 // ContainerStatus describes the current state of a container in an agent. The
 // enumerated statuses, below, are a really quick first draft, and are

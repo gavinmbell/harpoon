@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/soundcloud/harpoon/harpoon-agent/lib"
-
 	"github.com/bernerdschaefer/eventsource"
+
+	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
 
 func TestContainerList(t *testing.T) {
@@ -29,14 +29,10 @@ func TestContainerList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if ev.Type != agent.ContainerInstancesEventName {
-		t.Fatal("event type not 'containers'")
-	}
-
-	var containers agent.ContainerInstances
+	var containers []agent.ContainerInstance
 
 	if err := json.Unmarshal(ev.Data, &containers); err != nil {
-		t.Fatal("unable to load container json:", err)
+		t.Fatal("unable to load containers json:", err)
 	}
 
 	registry.statec <- agent.ContainerInstance{ID: "123"}
@@ -46,17 +42,15 @@ func TestContainerList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if ev.Type != agent.ContainerInstanceEventName {
-		t.Fatal("event type not 'container'")
+	if err := json.Unmarshal(ev.Data, &containers); err != nil {
+		t.Fatal("unable to load containers json:", err)
 	}
 
-	var container agent.ContainerInstance
-
-	if err := json.Unmarshal(ev.Data, &container); err != nil {
-		t.Fatal("unable to load container json:", err)
+	if len(containers) != 1 {
+		t.Fatal("invalid number of containers in delta update")
 	}
 
-	if container.ID != "123" {
+	if containers[0].ID != "123" {
 		t.Fatal("container event invalid")
 	}
 }

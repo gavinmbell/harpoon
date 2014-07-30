@@ -213,7 +213,6 @@ func (a *api) handleContainerStream(_ string, enc *eventsource.Encoder, stop <-c
 	}
 
 	enc.Encode(eventsource.Event{
-		Type: agent.ContainerInstancesEventName,
 		Data: b,
 	})
 
@@ -222,13 +221,12 @@ func (a *api) handleContainerStream(_ string, enc *eventsource.Encoder, stop <-c
 		case <-stop:
 			return
 		case state := <-statec:
-			b, err := json.Marshal(state)
+			b, err := json.Marshal([]agent.ContainerInstance{state})
 			if err != nil {
 				return
 			}
 
 			enc.Encode(eventsource.Event{
-				Type: agent.ContainerInstanceEventName,
 				Data: b,
 			})
 		}
