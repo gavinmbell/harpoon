@@ -17,7 +17,7 @@ func TestListenersRecieveMessages(t *testing.T) {
 	cl := NewContainerLog(3)
 	// A channel should be buffered
 	logSink := make(chan string, 1)
-	cl.Listen(logSink)
+	cl.Notify(logSink)
 	cl.AddLogLine("m1")
 	ExpectMessage(t, logSink, "m1")
 }
@@ -26,14 +26,14 @@ func TestBlockedChannelsAreSkipped(t *testing.T) {
 	cl := NewContainerLog(3)
 	// This channel is blocked
 	logSink := make(chan string, 0)
-	cl.Listen(logSink)
+	cl.Notify(logSink)
 	ExpectNoMessage(t, logSink)
 }
 
 func TestListenerShouldReceivesAllMessagesOnChannel(t *testing.T) {
 	cl := NewContainerLog(3)
 	logSink := make(chan string, 2)
-	cl.Listen(logSink)
+	cl.Notify(logSink)
 	cl.AddLogLine("m1")
 	cl.AddLogLine("m2")
 	ExpectMessage(t, logSink, "m1")
@@ -44,8 +44,8 @@ func TestMessagesShouldBroadcastToAllListeners(t *testing.T) {
 	cl := NewContainerLog(3)
 	logSink1 := make(chan string, 2)
 	logSink2 := make(chan string, 2)
-	cl.Listen(logSink1)
-	cl.Listen(logSink2)
+	cl.Notify(logSink1)
+	cl.Notify(logSink2)
 	cl.AddLogLine("m1")
 	ExpectMessage(t, logSink1, "m1")
 	ExpectMessage(t, logSink2, "m1")
@@ -55,9 +55,9 @@ func TestRemovedListenersDoNotReceiveMessages(t *testing.T) {
 	cl := NewContainerLog(3)
 	logSink1 := make(chan string, 2)
 	logSink2 := make(chan string, 2)
-	cl.Listen(logSink1)
-	cl.Listen(logSink2)
-	cl.Unlisten(logSink2)
+	cl.Notify(logSink1)
+	cl.Notify(logSink2)
+	cl.Stop(logSink2)
 	cl.AddLogLine("m1")
 	ExpectMessage(t, logSink1, "m1")
 	ExpectNoMessage(t, logSink2)
@@ -75,7 +75,7 @@ func TestKillingContainerUnblocksListeners(t *testing.T) {
 		}
 		close(receiverTerminated)
 	}()
-	cl.Listen(logSink)
+	cl.Notify(logSink)
 	cl.Exit()
 	select {
 	case <-receiverTerminated:

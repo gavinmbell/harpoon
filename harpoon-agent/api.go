@@ -260,8 +260,8 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 
 	if isStreamAccept(r.Header.Get("Accept")) {
 		logLines := make(chan string, 2000)
-		container.logs.Listen(logLines)
-		defer container.logs.Unlisten(logLines)
+		container.logs.Notify(logLines)
+		defer container.logs.Stop(logLines)
 		for line := range logLines {
 			if _, err := w.Write([]byte(line)); err != nil {
 				return

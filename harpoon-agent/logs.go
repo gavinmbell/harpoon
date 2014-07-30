@@ -18,24 +18,24 @@ import (
 
 type containerLog struct {
 	entries   *RingBuffer
-	listeners map[chan string]struct{}
+	notifications map[chan string]struct{}
 
 	addc      chan logAdd
 	lastc     chan logLast
-	listenc   chan logListen
-	unlistenc chan logUnlisten
+	notifyc   chan logNotify
+	stopc     chan logStop
 	quitc     chan struct{}
 }
 
 func NewContainerLog(bufferSize int) *containerLog {
 	cl := &containerLog{
 		entries:   NewRingBuffer(bufferSize),
-		listeners: make(map[chan string]struct{}),
+		notifications: make(map[chan string]struct{}),
 
 		addc:      make(chan logAdd),
 		lastc:     make(chan logLast),
-		listenc:   make(chan logListen),
-		unlistenc: make(chan logUnlisten),
+		notifyc:   make(chan logNotify),
+		stopc:     make(chan logStop),
 		quitc:     make(chan struct{}),
 	}
 	go cl.loop()
@@ -51,11 +51,11 @@ type logLast struct {
 	last  chan []string // passes result to caller
 }
 
-type logListen struct {
+type logNotify struct {
 	logSink chan string // supplied by caller
 }
 
-type logUnlisten struct {
+type logStop struct {
 	logSink chan string // supplied by caller
 }
 
@@ -83,23 +83,19 @@ func (cl *containerLog) Last(n int) []string {
 	return <-msg.last
 }
 
-// Listen subscribes a listener to a container.  New log lines to the subscribed container
-// are set to all of its listeners via their supplied logSink channels.  A logSink does
-// receive messages while it is blocked.  All of those messages are lost like tears in the
-// rain.
-//
-// The caller can subsequently use the ListenerID to remove the subscription.
-func (cl *containerLog) Listen(logSink chan string) {
-	cl.listenc <- logListen{logSink: logSink}
+// Notify subscribes a listener to a container.  New log lines are sent to all logSinks
+// in the notifications set.  A logSink does not receive messages while it is blocked.
+// All of those messages are lost like tears in the rain.
+func (cl *containerLog) Notify(logSink chan string) {
+	cl.notifyc <- logNotify{logSink: logSink}
 }
 
-// Unlisten removes a listener from a container's log.  The ListenerID was
-// obtained when the client called Listen().
-func (cl *containerLog) Unlisten(logSink chan string) {
-	cl.unlistenc <- logUnlisten{logSink: logSink}
+// Stop removes the logSink from the notifications set.
+func (cl *containerLog) Stop(logSink chan string) {
+	cl.stopc <- logStop{logSink: logSink}
 }
 
-// Exit causes cleans out all the listeners and terminates the loop()
+// Exit causes terminates the loop() cleanly
 func (cl *containerLog) Exit() {
 	close(cl.quitc)
 }
@@ -112,12 +108,12 @@ func (cl *containerLog) loop() {
 			cl.insert(msg.logLine)
 		case msg := <-cl.lastc:
 			msg.last <- cl.entries.Last(msg.count)
-		case msg := <-cl.listenc:
-			cl.addListener(msg.logSink)
-		case msg := <-cl.unlistenc:
-			cl.removeListener(msg.logSink)
+		case msg := <-cl.notifyc:
+			cl.addNotifier(msg.logSink)
+		case msg := <-cl.stopc:
+			cl.removeNotifier(msg.logSink)
 		case <-cl.quitc:
-			cl.removeListeners()
+			cl.removeNotifiers()
 			return
 		}
 	}
@@ -127,7 +123,7 @@ func (cl *containerLog) loop() {
 func (cl *containerLog) insert(logLine string) {
 	cl.entries.Insert(logLine)
 	// Send the logLine to all listeners, skipping those who have blocked channels
-	for logSink := range cl.listeners {
+	for logSink := range cl.notifications {
 		select {
 		case logSink <- logLine:
 			// Message sent successfully
@@ -137,25 +133,25 @@ func (cl *containerLog) insert(logLine string) {
 	}
 }
 
-// addListener adds a listener
-func (cl *containerLog) addListener(logSink chan string) {
-	cl.listeners[logSink] = struct{}{}
+// addNotifier adds a listener
+func (cl *containerLog) addNotifier(logSink chan string) {
+	cl.notifications[logSink] = struct{}{}
 }
 
-// removeLister removes listenerID from the set of listeners
-func (cl *containerLog) removeListener(logSink chan string) {
-	_, ok := cl.listeners[logSink]
+// removeLister removes logSink from the notification list
+func (cl *containerLog) removeNotifier(logSink chan string) {
+	_, ok := cl.notifications[logSink]
 	if !ok {
 		return
 	}
 	close(logSink)
-	delete(cl.listeners, logSink)
+	delete(cl.notifications, logSink)
 }
 
-// removeListeners removes all listeners
-func (cl *containerLog) removeListeners() {
-	for listenerID := range cl.listeners {
-		cl.removeListener(listenerID)
+// removeNotifiers removes all logSinks from the notification list
+func (cl *containerLog) removeNotifiers() {
+	for logSink := range cl.notifications {
+		cl.removeNotifier(logSink)
 	}
 }
 
