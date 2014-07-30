@@ -7,9 +7,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/bernerdschaefer/eventsource"
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
@@ -78,7 +82,39 @@ func (c remoteAgent) Events() (<-chan []agent.ContainerInstance, agent.Stopper, 
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	return nil, nil, fmt.Errorf("not yet implemented")
+	var (
+		statec = make(chan []agent.ContainerInstance)
+		stopc  = make(chan struct{})
+		es     = eventsource.New(req, 1*time.Second)
+	)
+
+	go func() {
+		<-stopc
+		es.Close()
+	}()
+
+	go func() {
+		defer close(statec)
+		for {
+			event, err := es.Read()
+			if err != nil {
+				log.Printf("%s: %s", c.URL.String(), err)
+				return
+			}
+			var containerInstances []agent.ContainerInstance
+			if err := json.Unmarshal(event.Data, &containerInstances); err != nil {
+				log.Printf("%s: %s", c.URL.String(), err)
+				continue
+			}
+			select {
+			case statec <- containerInstances:
+			default:
+				log.Printf("%s: slow receiver missed event", c.URL.String())
+			}
+		}
+	}()
+
+	return statec, stopperChan(stopc), nil
 }
 
 type containerEvent interface {

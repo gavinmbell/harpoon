@@ -101,12 +101,10 @@ func (c *mockAgent) stop(ch chan agent.ContainerInstance) {
 	delete(c.subscribers, ch)
 }
 
-func (c *mockAgent) broadcast(ci agent.ContainerInstance) {
-	c.RLock()
-	defer c.RUnlock()
-	for ch := range c.subscribers {
+func broadcastContainerInstance(dst map[chan agent.ContainerInstance]struct{}, containerInstance agent.ContainerInstance) {
+	for c := range dst {
 		select {
-		case ch <- ci:
+		case c <- containerInstance:
 		default:
 		}
 	}
@@ -158,13 +156,15 @@ func (c *mockAgent) getContainerEvents(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 
+	w.Header().Add("Content-Type", "text/event-stream")
+
 	enc.Encode(eventsource.Event{Data: buf})
 	enc.Flush()
 
 	for {
 		select {
-		case change := <-changec:
-			buf, _ := json.Marshal(change)
+		case containerInstance := <-changec:
+			buf, _ := json.Marshal([]agent.ContainerInstance{containerInstance})
 			enc.Encode(eventsource.Event{Data: buf})
 			enc.Flush()
 		case <-closec:
@@ -204,20 +204,23 @@ func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httpr
 		c.Lock()
 		defer c.Unlock()
 		c.instances[id] = instance
+		broadcastContainerInstance(c.subscribers, instance)
 	}()
-	c.broadcast(instance)
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func (c *mockAgent) getContainer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.getContainerCount, 1)
+
 	id := p.ByName("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q required", "id"))
 		return
 	}
+
 	c.RLock()
 	defer c.RUnlock()
+
 	containerInstance, ok := c.instances[id]
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("%q not present", id))
@@ -233,19 +236,23 @@ func (c *mockAgent) deleteContainer(w http.ResponseWriter, r *http.Request, p ht
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q required", "id"))
 		return
 	}
+
 	c.Lock()
 	defer c.Unlock()
+
 	containerInstance, ok := c.instances[id]
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("%q not present", id))
 		return
 	}
+
 	switch containerInstance.Status {
 	case agent.ContainerStatusFailed, agent.ContainerStatusFinished:
 		delete(c.instances, id)
 		containerInstance.Status = agent.ContainerStatusDeleted
-		c.broadcast(containerInstance)
+		broadcastContainerInstance(c.subscribers, containerInstance)
 		w.WriteHeader(http.StatusOK)
+
 	default:
 		writeError(w, http.StatusNotFound, fmt.Errorf("%q not in a finished state, currently %s", id, containerInstance.Status))
 		return
@@ -266,23 +273,27 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 	case "stop":
 		c.Lock()
 		defer c.Unlock()
+
 		containerInstance, ok := c.instances[id]
 		if !ok {
 			writeError(w, http.StatusNotFound, fmt.Errorf("%q unknown; can't stop", id))
 			return
 		}
+
 		if containerInstance.Status != agent.ContainerStatusRunning {
 			writeError(w, http.StatusNotAcceptable, fmt.Errorf("%q not running (%s); can't stop", id, containerInstance.Status))
 			return
 		}
 		containerInstance.Status = agent.ContainerStatusFinished
 		w.WriteHeader(http.StatusAccepted) // "[Stop] returns immediately with 202 status."
+
 		go func() {
 			c.Lock()
 			defer c.Unlock()
 			c.instances[id] = containerInstance
-			c.broadcast(containerInstance)
+			broadcastContainerInstance(c.subscribers, containerInstance)
 		}()
+		return
 
 	case "restart":
 		writeError(w, http.StatusNotImplemented, fmt.Errorf("restart not yet implemented"))
@@ -293,7 +304,7 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 
 func (c *mockAgent) getContainerLog(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.getContainerLogCount, 1)
-	writeError(w, http.StatusNotImplemented, fmt.Errorf("not yet implemented"))
+	writeError(w, http.StatusNotImplemented, fmt.Errorf("log not yet implemented"))
 }
 
 func (c *mockAgent) getResources(w http.ResponseWriter, r *http.Request, p httprouter.Params) {

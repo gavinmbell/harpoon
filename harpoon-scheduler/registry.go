@@ -87,7 +87,7 @@ func (r *registry) schedule(containerID string, taskSpec taskSpec, c chan schedu
 		r.signals[containerID] = c
 	}
 
-	broadcast(r.subscriptions, registryState{
+	broadcastRegistryState(r.subscriptions, registryState{
 		pendingSchedule:   cp(r.pendingSchedule),
 		scheduled:         cp(r.scheduled),
 		pendingUnschedule: cp(r.pendingUnschedule),
@@ -123,7 +123,7 @@ func (r *registry) unschedule(containerID string, taskSpec taskSpec, c chan sche
 		r.signals[containerID] = c
 	}
 
-	broadcast(r.subscriptions, registryState{
+	broadcastRegistryState(r.subscriptions, registryState{
 		pendingSchedule:   cp(r.pendingSchedule),
 		scheduled:         cp(r.scheduled),
 		pendingUnschedule: cp(r.pendingUnschedule),
@@ -255,7 +255,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 		delete(r.signals, containerID)
 	}
 
-	broadcast(r.subscriptions, registryState{
+	broadcastRegistryState(r.subscriptions, registryState{
 		pendingSchedule:   cp(r.pendingSchedule),
 		scheduled:         cp(r.scheduled),
 		pendingUnschedule: cp(r.pendingUnschedule),
@@ -264,7 +264,7 @@ func (r *registry) signal(containerID string, schedulingSignal schedulingSignal)
 	log.Printf("registry: signal: %s", context)
 }
 
-func broadcast(subscriptions map[chan<- registryState]struct{}, registryState registryState) {
+func broadcastRegistryState(subscriptions map[chan<- registryState]struct{}, registryState registryState) {
 	for c := range subscriptions {
 		c <- registryState
 	}
