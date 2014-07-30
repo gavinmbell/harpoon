@@ -84,7 +84,7 @@ func TestKillingContainerUnblocksListeners(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 			t.Errorf("Blocked task never received an unblocking")
 		}
-		close(receiver_terminated)
+		close(receiverTerminated)
 	}()
 	cl.Listen(logSink)
 	cl.Exit()

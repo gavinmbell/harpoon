@@ -245,7 +245,7 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 		rawHistory  = r.URL.Query().Get("history")
 	)
 
-	if raw_history == "" {
+	if rawHistory == "" {
 		rawHistory = "10"
 	}
 

@@ -13,6 +13,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"regexp"
 	"sync"
 )
 
@@ -192,6 +193,10 @@ func receiveLogs(r *registry) {
 
 	var buf = make([]byte, 50000+256) // max line length + container id
 
+	// All log lines should start with the pattern container[FOO] where FOO
+	// is the container ID.
+	containsPtrn := regexp.MustCompile(`container\[([^\]]+)]`)
+
 	for {
 		n, addr, err := ln.ReadFromUDP(buf)
 		if err != nil {
@@ -199,13 +204,21 @@ func receiveLogs(r *registry) {
 			return
 		}
 
-		container, ok := r.Get(addr.String())
-		if ok {
-			container.logs.AddLogLine(string(buf[:n]))
-			log.Printf("LOG: %s : %s", addr, buf[:n])
-		} else {
-			log.Printf("LOG: Message to unknown container %s : %s", addr, buf[:n])
+		logLine := string(buf[:n])
+		matches := containsPtrn.FindStringSubmatch(logLine)
+		if len(matches) != 2 {
+			log.Printf("LOG: Message to unknown container %s : %s", addr, logLine)
+			continue
 		}
+
+		container, ok := r.Get(matches[1])
+		if !ok {
+			log.Printf("LOG: Message to unknown container %s : %s", addr, logLine)
+			continue
+		}
+
+		container.logs.AddLogLine(logLine)
+		log.Printf("LOG: %s : %s", addr, logLine)
 	}
 }
 
