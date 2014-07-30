@@ -263,8 +263,7 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 		container.logs.Listen(logLines)
 		defer container.logs.Unlisten(logLines)
 		for line := range logLines {
-			_, err := w.Write([]byte(line))
-			if err != nil {
+			if _, err := w.Write([]byte(line)); err != nil {
 				return
 			}
 		}
@@ -272,8 +271,7 @@ func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, line := range container.logs.Last(history) {
-		_, err := w.Write([]byte(line))
-		if err != nil {
+		if _, err := w.Write([]byte(line)); err != nil {
 			return
 		}
 	}
