@@ -18,17 +18,19 @@ import (
 type api struct {
 	http.Handler
 	registry *registry
+	logSet *LogSet
 
 	enabled bool
 	sync.RWMutex
 }
 
-func newAPI(r *registry) *api {
+func newAPI(r *registry, ls *LogSet) *api {
 	var (
 		mux = pat.New()
 		api = &api{
 			Handler:  mux,
 			registry: r,
+			logSet: ls,
 		}
 	)
 
@@ -38,6 +40,7 @@ func newAPI(r *registry) *api {
 	mux.Post("/containers/:id/heartbeat", http.HandlerFunc(api.handleHeartbeat))
 	mux.Post("/containers/:id/start", http.HandlerFunc(api.handleStart))
 	mux.Post("/containers/:id/stop", http.HandlerFunc(api.handleStop))
+	mux.Post("/containers/:id/log", http.HandlerFunc(api.handleLog))
 	mux.Get("/containers", http.HandlerFunc(api.handleList))
 
 	mux.Get("/resources", http.HandlerFunc(api.handleResources))
@@ -169,6 +172,7 @@ func (a *api) handleDestroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.logSet.Remove(ContainerID(id))
 	a.registry.Remove(id)
 
 	w.WriteHeader(http.StatusNoContent)
@@ -232,6 +236,52 @@ func isStreamAccept(accept string) bool {
 	}
 
 	return false
+}
+
+func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
+	e := json.NewEncoder(w)
+
+	e.Encode(a.registry.Instances().EventBody())
+
+	var (
+		id = r.URL.Query().Get(":id")
+		raw_history  = r.URL.Query().Get("history")
+	)
+
+	if raw_history == "" {
+		raw_history = "10"
+	}
+
+	_, ok := a.registry.Get(id)
+	if !ok {
+		http.Error(w, "", http.StatusNotFound)
+		return
+	}
+
+	history, err := strconv.Atoi(raw_history)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if isStreamAccept(r.Header.Get("Accept")) {
+		logLines := make(chan string, 2000)
+		a.logSet.Listen(ContainerID(id), logLines)
+		for line := range logLines {
+			_, err := w.Write([]byte(line))
+			if err != nil {
+				return
+			}
+		}
+		return
+	}
+
+	for _, line := range a.logSet.Last(ContainerID(id), history) {
+		_, err := w.Write([]byte(line))
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (a *api) handleResources(w http.ResponseWriter, r *http.Request) {

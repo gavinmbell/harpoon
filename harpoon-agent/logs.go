@@ -70,6 +70,13 @@ func (cl *containerLog) addListener(logSink chan string) ListenerID {
 	return listenerID
 }
 
+func (cl* containerLog) removeListeners() {
+	for listenerID, logSink := range cl.listeners {
+		close(logSink)
+		delete(cl.listeners, listenerID)
+	}
+}
+
 func (cl *containerLog) dropListener(listenerID ListenerID) {
 	delete(cl.listeners, listenerID)
 }
@@ -79,26 +86,22 @@ func (cl *containerLog) dropListener(listenerID ListenerID) {
 // Once a buffer for a container fills the oldest log elements are discarded to make
 // room for new ones.
 type LogSet struct {
-	logs             map[ContainerID]*containerLog
-	bufferSize       int
-	receiveMsgs      chan *logSetReceiveMsg
-	lastMsgs         chan *logSetLastMsg
-	listenMsgs       chan *logSetListenMsg
-	dropListenerMsgs chan *logSetDropListenerMsg
-	exitMsgs         chan *logSetExitMsg
+	logs                map[ContainerID]*containerLog
+	bufferSize          int
 }
 
 // NewLogSet creates a LogSet.  All containers will have log buffers of
 // bufferSize messages.  Launches message processing loop.
 func NewLogSet(bufferSize int) *LogSet {
 	ls := &LogSet{
-		logs:             map[ContainerID]*containerLog{},
-		bufferSize:       bufferSize,
-		receiveMsgs:      make(chan *logSetReceiveMsg),
-		lastMsgs:         make(chan *logSetLastMsg),
-		listenMsgs:       make(chan *logSetListenMsg),
-		dropListenerMsgs: make(chan *logSetDropListenerMsg),
-		exitMsgs:         make(chan *logSetExitMsg),
+		logs:					map[ContainerID]*containerLog{},
+		bufferSize:				bufferSize,
+		receiveMsgs:			make(chan *logSetReceiveMsg),
+		lastMsgs:				make(chan *logSetLastMsg),
+		listenMsgs:				make(chan *logSetListenMsg),
+		removeContainerMsgs:  	make(chan *logSetRemoveContainerMsg),
+		dropListenerMsgs:		make(chan *logSetDropListenerMsg),
+		exitMsgs:         		make(chan *logSetExitMsg),
 	}
 	go ls.loop()
 	return ls
@@ -155,6 +158,10 @@ type logSetDropListenerMsg struct {
 	listenerID  ListenerID  // supplied by caller
 }
 
+type logSetRemoveContainerMsg struct {
+	containerID ContainerID // supplied by caller
+}
+
 type logSetExitMsg struct {
 	containerID ContainerID // supplied by caller
 }
@@ -198,6 +205,10 @@ func (ls *LogSet) Listen(containerID ContainerID, logSink chan string) ListenerI
 	return <-msg.listenerIDResult
 }
 
+func (ls *LogSet) Remove(containerID ContainerID) {
+	ls.removeContainerMsgs <- &logSetRemoveContainerMsg{containerID}
+}
+
 // DropListener removes a listener from a container's log.  The ListenerID was
 // obtained when the client called Listen().
 func (ls *LogSet) DropListener(containerID ContainerID, listenerID ListenerID) {
@@ -219,6 +230,9 @@ func (ls *LogSet) loop() {
 			msg.last <- ls.getContainerLog(msg.containerID).entries.Last(msg.count)
 		case msg := <-ls.listenMsgs:
 			msg.listenerIDResult <- ls.getContainerLog(msg.containerID).addListener(msg.logSink)
+		case msg := <- ls.removeContainerMsgs:
+			ls.getContainerLog(msg.containerID).removeListeners()
+			delete(ls.logs, msg.containerID)
 		case msg := <-ls.dropListenerMsgs:
 			delete(ls.getContainerLog(msg.containerID).listeners, msg.listenerID)
 		case <-ls.exitMsgs:
