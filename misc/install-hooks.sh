@@ -6,7 +6,7 @@ function install() {
   hook=$1
 
   [ -f .git/hooks/$hook ] && {
-    echo ".git/hooks/$hook exists" >&3;
+    echo ".git/hooks/$hook exists" >&2;
     return 1;
   }
 
