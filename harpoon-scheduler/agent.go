@@ -106,11 +106,7 @@ func (c remoteAgent) Events() (<-chan []agent.ContainerInstance, agent.Stopper, 
 				log.Printf("%s: %s", c.URL.String(), err)
 				continue
 			}
-			select {
-			case statec <- containerInstances:
-			default:
-				log.Printf("%s: slow receiver missed event", c.URL.String())
-			}
+			statec <- containerInstances
 		}
 	}()
 
