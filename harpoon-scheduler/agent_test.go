@@ -159,14 +159,12 @@ func (c *mockAgent) getContainerEvents(w http.ResponseWriter, r *http.Request, p
 	w.Header().Add("Content-Type", "text/event-stream")
 
 	enc.Encode(eventsource.Event{Data: buf})
-	enc.Flush()
 
 	for {
 		select {
 		case containerInstance := <-changec:
 			buf, _ := json.Marshal([]agent.ContainerInstance{containerInstance})
 			enc.Encode(eventsource.Event{Data: buf})
-			enc.Flush()
 		case <-closec:
 			log.Printf("mockAgent getContainerEvents: HTTP request closed")
 			return
