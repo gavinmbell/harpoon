@@ -102,7 +102,7 @@ func (s *stateMachine) loop(
 				continue
 			}
 			incContainerEventsReceived(1)
-			log.Printf("state machine: %s: state update: %d container instance(s)", endpoint, len(containerInstances))
+			//log.Printf("state machine: %s: state update: %d container instance(s)", endpoint, len(containerInstances))
 			for _, containerInstance := range containerInstances {
 				updateWith(containerInstance)
 			}

@@ -127,9 +127,28 @@ func (c *mockAgent) getContainers(w http.ResponseWriter, r *http.Request, p http
 	defer atomic.AddInt32(&c.getContainersCount, 1)
 
 	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-		c.getContainerEvents(w, r, p)
+		eventsource.Handler(func(lastID string, enc *eventsource.Encoder, stop <-chan bool) {
+			changec := make(chan agent.ContainerInstance)
+			c.notify(changec)
+			defer c.stop(changec)
+
+			buf, _ := json.Marshal(c.getContainerInstances())
+			enc.Encode(eventsource.Event{Data: buf})
+
+			for {
+				select {
+				case <-stop:
+					log.Printf("mockAgent getContainerEvents: HTTP request closed")
+					return
+				case containerInstance := <-changec:
+					buf, _ = json.Marshal([]agent.ContainerInstance{containerInstance})
+					enc.Encode(eventsource.Event{Data: buf})
+				}
+			}
+		}).ServeHTTP(w, r)
 		return
 	}
+
 	json.NewEncoder(w).Encode(c.getContainerInstances())
 }
 
