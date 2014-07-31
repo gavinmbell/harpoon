@@ -14,25 +14,31 @@ func TestLastRetrievesLastLogLines(t *testing.T) {
 }
 
 func TestListenersRecieveMessages(t *testing.T) {
-	cl := NewContainerLog(3)
-	// A channel should be buffered
-	logSink := make(chan string, 1)
+	var (
+		cl = NewContainerLog(3)
+		// A blocking channel will not receive messages.
+		logSink = make(chan string, 1)
+	)
 	cl.Notify(logSink)
 	cl.AddLogLine("m1")
 	ExpectMessage(t, logSink, "m1")
 }
 
 func TestBlockedChannelsAreSkipped(t *testing.T) {
-	cl := NewContainerLog(3)
-	// This channel is blocked
-	logSink := make(chan string, 0)
+	var (
+		cl      = NewContainerLog(3)
+		logSink = make(chan string)
+	)
 	cl.Notify(logSink)
+	cl.AddLogLine("m1")
 	ExpectNoMessage(t, logSink)
 }
 
 func TestListenerShouldReceivesAllMessagesOnChannel(t *testing.T) {
-	cl := NewContainerLog(3)
-	logSink := make(chan string, 2)
+	var (
+		cl      = NewContainerLog(3)
+		logSink = make(chan string, 2)
+	)
 	cl.Notify(logSink)
 	cl.AddLogLine("m1")
 	cl.AddLogLine("m2")
@@ -41,9 +47,11 @@ func TestListenerShouldReceivesAllMessagesOnChannel(t *testing.T) {
 }
 
 func TestMessagesShouldBroadcastToAllListeners(t *testing.T) {
-	cl := NewContainerLog(3)
-	logSink1 := make(chan string, 2)
-	logSink2 := make(chan string, 2)
+	var (
+		cl       = NewContainerLog(3)
+		logSink1 = make(chan string, 2)
+		logSink2 = make(chan string, 2)
+	)
 	cl.Notify(logSink1)
 	cl.Notify(logSink2)
 	cl.AddLogLine("m1")
@@ -52,9 +60,11 @@ func TestMessagesShouldBroadcastToAllListeners(t *testing.T) {
 }
 
 func TestRemovedListenersDoNotReceiveMessages(t *testing.T) {
-	cl := NewContainerLog(3)
-	logSink1 := make(chan string, 2)
-	logSink2 := make(chan string, 2)
+	var (
+		cl       = NewContainerLog(3)
+		logSink1 = make(chan string, 2)
+		logSink2 = make(chan string, 2)
+	)
 	cl.Notify(logSink1)
 	cl.Notify(logSink2)
 	cl.Stop(logSink2)
@@ -64,9 +74,11 @@ func TestRemovedListenersDoNotReceiveMessages(t *testing.T) {
 }
 
 func TestKillingContainerUnblocksListeners(t *testing.T) {
-	cl := NewContainerLog(3)
-	logSink := make(chan string, 1)
-	receiverTerminated := make(chan struct{})
+	var (
+		cl                 = NewContainerLog(3)
+		logSink            = make(chan string, 1)
+		receiverTerminated = make(chan struct{})
+	)
 	go func() {
 		select {
 		case <-logSink:

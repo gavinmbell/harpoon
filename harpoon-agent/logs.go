@@ -17,26 +17,26 @@ import (
 )
 
 type containerLog struct {
-	entries   *RingBuffer
+	entries       *RingBuffer
 	notifications map[chan string]struct{}
 
-	addc      chan logAdd
-	lastc     chan logLast
-	notifyc   chan logNotify
-	stopc     chan logStop
-	quitc     chan struct{}
+	addc    chan logAdd
+	lastc   chan logLast
+	notifyc chan logNotify
+	stopc   chan logStop
+	quitc   chan struct{}
 }
 
 func NewContainerLog(bufferSize int) *containerLog {
 	cl := &containerLog{
-		entries:   NewRingBuffer(bufferSize),
+		entries:       NewRingBuffer(bufferSize),
 		notifications: make(map[chan string]struct{}),
 
-		addc:      make(chan logAdd),
-		lastc:     make(chan logLast),
-		notifyc:   make(chan logNotify),
-		stopc:     make(chan logStop),
-		quitc:     make(chan struct{}),
+		addc:    make(chan logAdd),
+		lastc:   make(chan logLast),
+		notifyc: make(chan logNotify),
+		stopc:   make(chan logStop),
+		quitc:   make(chan struct{}),
 	}
 	go cl.loop()
 	return cl
