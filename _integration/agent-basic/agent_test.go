@@ -1,56 +1,39 @@
-package main
+package agent_test
 
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
-	// "io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 
 	"github.com/bernerdschaefer/eventsource"
-	// "github.com/docker/libcontainer"
 )
 
-func main() {
-	if err := runTest(); err != nil {
-		log.Fatal(err)
+var (
+	agentScript = flag.String("startAgent", "../start-agent.sh", "path to script to start agent")
+)
+
+func TestAgent(t *testing.T) {
+	if err := runTest(t); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func runTest() error {
-	// tmp, err := ioutil.TempDir("", "harpoon-integration-")
-	// if err != nil {
-	// 	return err
-	// }
-	// defer os.RemoveAll(tmp)
-
-	// config, _ := json.Marshal(&libcontainer.Config{
-	// 	MountConfig: &libcontainer.MountConfig{},
-	// 	Env: os.Environ(),
-	// 	Namespaces: map[string]bool{
-	// 		"NEWNS":  true,
-	// 		"NEWPID": true,
-	// 	},
-	// })
-
-	// if err := ioutil.WriteFile(tmp+"/container.json", config, os.ModePerm); err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// agentCmd := exec.Command("nsinit", "exec", "--", "harpoon-agent", "-addr", ":7777")
-	// agentCmd.Env = os.Environ()
-	// agentCmd.Env = append(agentCmd.Env, fmt.Sprintf("data_path=%s", tmp))
-	// agentCmd.Dir = "/"
-	agentCmd := exec.Command("harpoon-agent", "-addr", ":7777")
+func runTest(t *testing.T) error {
+	agentCmd := exec.Command(*agentScript)
+	agentCmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID,
+	}
 	agentCmd.Stdout = os.Stderr
 	agentCmd.Stderr = os.Stderr
 
@@ -68,7 +51,7 @@ func runTest() error {
 		case <-exited:
 			return
 		case <-time.After(5 * time.Second):
-			log.Println("process failed to exit after 5s; killing")
+			t.Error("process failed to exit after 5s; killing")
 		}
 
 		agentCmd.Process.Kill()
@@ -88,7 +71,7 @@ func runTest() error {
 		case <-checkAgent.C:
 			res, err := request("GET", "http://localhost:7777/containers", nil)
 			if err != nil {
-				log.Println("unable to reach agent, retrying: ", err)
+				t.Log("unable to reach agent, retrying: ", err)
 				checkAgent.Reset(time.Second)
 				continue
 			}
@@ -96,14 +79,14 @@ func runTest() error {
 			res.Body.Close()
 			ready = true
 
-			log.Println("agent responding, starting test")
+			t.Log("agent responding, starting test")
 		}
 	}
 
-	return test()
+	return test(t)
 }
 
-func test() error {
+func test(t *testing.T) error {
 	var (
 		statec = make(chan agent.ContainerInstance)
 		req, _ = http.NewRequest("GET", "http://localhost:7777/containers", nil)
@@ -116,7 +99,7 @@ func test() error {
 		return err
 	}
 
-	go notify(es, statec)
+	go notify(t, es, statec)
 
 	config := agent.ContainerConfig{
 		JobName:     "integration",
@@ -145,32 +128,32 @@ func test() error {
 	}
 	res.Body.Close()
 
-	status, err := waitState(statec, "integration-1", agent.ContainerStatusStarting, agent.ContainerStatusRunning)
+	status, err := waitState(t, statec, "integration-1", agent.ContainerStatusStarting, agent.ContainerStatusRunning)
 
-	log.Printf("waitState(STARTING|RUNNING) => %q, %v", status, err)
+	t.Logf("waitState(STARTING|RUNNING) => %q, %v", status, err)
 
 	for i := 0; i < 5; i++ {
 		res, err := request("GET", "http://localhost:30000", nil)
 		if err != nil {
-			log.Println("unable to reach container: ", err)
+			t.Log("unable to reach container: ", err)
 			time.Sleep(time.Second)
 			continue
 		}
 
 		res.Body.Close()
-		log.Println("container success!")
+		t.Log("container success!")
 		break
 	}
 
 	{
 		res, err := request("POST", "http://localhost:7777/containers/integration-1/stop", nil)
 		if err != nil {
-			log.Println("unable to stop container: ", err)
+			t.Error("unable to stop container: ", err)
 		} else {
 			res.Body.Close()
 
-			if _, err := waitState(statec, "integration-1", agent.ContainerStatusFinished); err != nil {
-				log.Println("unable to stop container: ", err)
+			if _, err := waitState(t, statec, "integration-1", agent.ContainerStatusFinished); err != nil {
+				t.Error("unable to stop container: ", err)
 			}
 		}
 	}
@@ -182,7 +165,7 @@ func test() error {
 		}
 		res.Body.Close()
 
-		if _, err := waitState(statec, "integration-1", agent.ContainerStatusDeleted); err != nil {
+		if _, err := waitState(t, statec, "integration-1", agent.ContainerStatusDeleted); err != nil {
 			return err
 		}
 	}
@@ -214,7 +197,7 @@ func request(verb, uri string, body io.Reader) (*http.Response, error) {
 	return res, nil
 }
 
-func notify(es *eventsource.EventSource, ch chan agent.ContainerInstance) {
+func notify(t *testing.T, es *eventsource.EventSource, ch chan agent.ContainerInstance) {
 	defer es.Close()
 
 	for {
@@ -225,7 +208,7 @@ func notify(es *eventsource.EventSource, ch chan agent.ContainerInstance) {
 		}
 
 		if err != nil {
-			log.Println("eventsource: ", err)
+			t.Error("eventsource: ", err)
 			return
 		}
 
@@ -234,19 +217,19 @@ func notify(es *eventsource.EventSource, ch chan agent.ContainerInstance) {
 			var ins agent.ContainerInstance
 
 			if err := json.Unmarshal(ev.Data, &ins); err != nil {
-				log.Println("eventsource: ", err)
+				t.Error("eventsource: ", err)
 				return
 			}
 
 			ch <- ins
 
 		default:
-			log.Printf("eventsource: unsupported event type %q", ev.Type)
+			t.Errorf("eventsource: unsupported event type %q", ev.Type)
 		}
 	}
 }
 
-func waitState(ch chan agent.ContainerInstance, id string, statuses ...agent.ContainerStatus) (agent.ContainerStatus, error) {
+func waitState(t *testing.T, ch chan agent.ContainerInstance, id string, statuses ...agent.ContainerStatus) (agent.ContainerStatus, error) {
 	timeout := time.After(10 * time.Second)
 
 	for {
@@ -256,7 +239,7 @@ func waitState(ch chan agent.ContainerInstance, id string, statuses ...agent.Con
 
 		case state := <-ch:
 			if state.ID != id {
-				log.Printf("eventsource: unknown id: %q")
+				t.Logf("eventsource: unknown id: %q")
 				continue
 			}
 
