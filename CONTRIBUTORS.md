@@ -1,0 +1,4 @@
+- Peter Bourgon (peter@bourgon.org)
+- Bernerd Schaefer (bj.schaefer@gmail.com)
+- Alex Simmerl (a.simmerl@gmail.com)
+- Jeff Younker (jeff@drinktomi.com)
