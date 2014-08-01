@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/soundcloud/harpoon/harpoon-agent/lib"
-
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/cgroups"
 	"github.com/docker/libcontainer/devices"
 	"github.com/docker/libcontainer/mount"
+
+	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
 
 type container struct {

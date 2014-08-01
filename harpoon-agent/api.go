@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/soundcloud/harpoon/harpoon-agent/lib"
+	"github.com/bmizerany/pat"
 
 	"github.com/bernerdschaefer/eventsource"
-	"github.com/bmizerany/pat"
+	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
 
 type api struct {
