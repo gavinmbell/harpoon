@@ -11,6 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/bernerdschaefer/eventsource"
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
@@ -71,7 +74,7 @@ func (c remoteAgent) Containers() ([]agent.ContainerInstance, error) {
 	}
 }
 
-func (c remoteAgent) Events() (<-chan agent.ContainerEvent, agent.Stopper, error) {
+func (c remoteAgent) Events() (<-chan []agent.ContainerInstance, agent.Stopper, error) {
 	c.URL.Path = apiVersionPrefix + apiGetContainersPath
 	req, err := http.NewRequest("GET", c.URL.String(), nil)
 	if err != nil {
@@ -79,99 +82,35 @@ func (c remoteAgent) Events() (<-chan agent.ContainerEvent, agent.Stopper, error
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, nil, fmt.Errorf("agent unavailable (%s)", err)
-	}
-	// Because we're streaming, we close the body in a different way.
+	var (
+		statec = make(chan []agent.ContainerInstance)
+		stopc  = make(chan struct{})
+		es     = eventsource.New(req, 1*time.Second)
+	)
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		containerEventChan, stop := make(chan agent.ContainerEvent), make(chan struct{})
+	go func() {
+		<-stopc
+		es.Close()
+	}()
 
-		// Launch a goroutine to monitor the stopper and terminate the stream
-		// by closing the response body. That closure will be detected by the
-		// server, causing a stream termination. It'll also be detected by the
-		// reading goroutine (below) which will exit.
-		//
-		// This goroutine owns the response body.
-		go func() {
-			<-stop
-			resp.Body.Close()
-		}()
-
-		// Launch a goroutine to synchronously read from the body stream, and
-		// push events to the containerEventChan. When the stopper triggers
-		// a resp.Body.Close, this goroutine will detect an error in a read and
-		// terminate as well.
-		//
-		// This goroutine owns the containerEventChan.
-		//
-		// TODO(pb): distinguish requested-close from accidental-close, and
-		// manage accidental-closes so the client isn't inconvenienced.
-		go func() {
-			log.Printf("agent: %s: event stream reader started", c.URL.String())
-			defer log.Printf("agent: %s: event stream reader terminated", c.URL.String())
-
-			defer close(containerEventChan)
-
-			rd := bufio.NewReader(resp.Body)
-			for {
-				eventName, err := rd.ReadString('\n')
-				if err != nil {
-					log.Printf("agent: %s: read event name: %s", c.URL.String(), err)
-					return
-				}
-				eventName = strings.TrimSpace(eventName)
-				if eventName == "" {
-					continue // stale data from previous write
-				}
-				eventBody, err := rd.ReadBytes('\n')
-				if err != nil {
-					log.Printf("agent: %s: read event body: %s", c.URL.String(), err)
-					return
-				}
-				eventBody = bytes.TrimSpace(eventBody)
-				var event agent.ContainerEvent
-				switch eventName {
-				case agent.ContainerInstancesEventName:
-					var e agent.ContainerInstances
-					if err := json.Unmarshal(eventBody, &e); err != nil {
-						log.Printf("agent: %s: unmarshal event body: %s", c.URL.String(), err)
-						return
-					}
-					event = e
-				case agent.ContainerInstanceEventName:
-					var e agent.ContainerInstance
-					if err := json.Unmarshal(eventBody, &e); err != nil {
-						log.Printf("agent: %s: unmarshal event body: %s", c.URL.String(), err)
-						return
-					}
-					event = e
-				default:
-					log.Printf("agent: %s: unknown event name %q", c.URL.String(), eventName)
-					return
-				}
-				select {
-				case containerEventChan <- event:
-				case <-stop:
-					log.Printf("agent: %s: received stop signal", c.URL)
-					return
-				}
+	go func() {
+		defer close(statec)
+		for {
+			event, err := es.Read()
+			if err != nil {
+				log.Printf("%s: %s", c.URL.String(), err)
+				return
 			}
-		}()
-
-		// The caller owns the stop chan.
-		return containerEventChan, stopperChan(stop), nil
-
-	default:
-		defer resp.Body.Close()
-		var response errorResponse
-		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-			return nil, nil, fmt.Errorf("invalid agent response (%s) (HTTP %s)", err, resp.Status)
+			var containerInstances []agent.ContainerInstance
+			if err := json.Unmarshal(event.Data, &containerInstances); err != nil {
+				log.Printf("%s: %s", c.URL.String(), err)
+				continue
+			}
+			statec <- containerInstances
 		}
-		return nil, nil, fmt.Errorf("%s (HTTP %d %s)", response.Error, response.StatusCode, response.StatusText)
-	}
+	}()
+
+	return statec, stopperChan(stopc), nil
 }
 
 type containerEvent interface {

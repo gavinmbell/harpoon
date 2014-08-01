@@ -12,6 +12,7 @@ import (
 
 	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 
+	"github.com/bernerdschaefer/eventsource"
 	"github.com/bmizerany/pat"
 )
 
@@ -200,23 +201,45 @@ func (a *api) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *api) handleList(w http.ResponseWriter, r *http.Request) {
-	e := json.NewEncoder(w)
+func (a *api) handleContainerStream(_ string, enc *eventsource.Encoder, stop <-chan bool) {
+	statec := make(chan agent.ContainerInstance)
 
-	e.Encode(a.registry.Instances().EventBody())
+	a.registry.Notify(statec)
+	defer a.registry.Stop(statec)
 
-	if isStreamAccept(r.Header.Get("Accept")) {
-		var (
-			statec = make(chan agent.ContainerInstance)
-		)
+	b, err := json.Marshal(a.registry.Instances())
+	if err != nil {
+		return
+	}
 
-		a.registry.Notify(statec)
-		defer a.registry.Stop(statec)
+	enc.Encode(eventsource.Event{
+		Data: b,
+	})
 
-		for state := range statec {
-			e.Encode(state)
+	for {
+		select {
+		case <-stop:
+			return
+		case state := <-statec:
+			b, err := json.Marshal([]agent.ContainerInstance{state})
+			if err != nil {
+				return
+			}
+
+			enc.Encode(eventsource.Event{
+				Data: b,
+			})
 		}
 	}
+}
+
+func (a *api) handleList(w http.ResponseWriter, r *http.Request) {
+	if isStreamAccept(r.Header.Get("Accept")) {
+		eventsource.Handler(a.handleContainerStream).ServeHTTP(w, r)
+		return
+	}
+
+	json.NewEncoder(w).Encode(a.registry.Instances())
 }
 
 func isStreamAccept(accept string) bool {

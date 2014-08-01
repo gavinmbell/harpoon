@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/bernerdschaefer/eventsource"
 
 	"github.com/julienschmidt/httprouter"
 
@@ -66,21 +67,18 @@ type mockAgent struct {
 	*httprouter.Router
 
 	sync.RWMutex
-	instances  map[string]agent.ContainerInstance
-	changesIn  chan map[string]agent.ContainerInstance
-	changesOut map[string]chan map[string]agent.ContainerInstance
+	instances   map[string]agent.ContainerInstance
+	subscribers map[chan agent.ContainerInstance]struct{}
 
 	getContainersCount, putContainerCount, getContainerCount, deleteContainerCount, postContainerCount, getContainerLogCount, getResourcesCount int32
 }
 
 func newMockAgent() *mockAgent {
 	c := &mockAgent{
-		Router:     httprouter.New(),
-		instances:  map[string]agent.ContainerInstance{},
-		changesIn:  make(chan map[string]agent.ContainerInstance),
-		changesOut: map[string]chan map[string]agent.ContainerInstance{},
+		Router:      httprouter.New(),
+		instances:   map[string]agent.ContainerInstance{},
+		subscribers: map[chan agent.ContainerInstance]struct{}{},
 	}
-	go demux(c.changesIn, &c.RWMutex, c.changesOut)
 	c.Router.GET(apiVersionPrefix+apiGetContainersPath, c.getContainers)
 	c.Router.PUT(apiVersionPrefix+apiPutContainerPath, c.putContainer)
 	c.Router.GET(apiVersionPrefix+apiGetContainerPath, c.getContainer)
@@ -91,24 +89,33 @@ func newMockAgent() *mockAgent {
 	return c
 }
 
-func demux(in <-chan map[string]agent.ContainerInstance, mux *sync.RWMutex, out map[string]chan map[string]agent.ContainerInstance) {
-	for m := range in {
-		mux.RLock()
-		for s, c := range out {
-			select {
-			case c <- m:
-			default:
-				panic("lost event to " + s)
-			}
+func (c *mockAgent) notify(ch chan agent.ContainerInstance) {
+	c.Lock()
+	defer c.Unlock()
+	c.subscribers[ch] = struct{}{}
+}
+
+func (c *mockAgent) stop(ch chan agent.ContainerInstance) {
+	c.Lock()
+	defer c.Unlock()
+	delete(c.subscribers, ch)
+}
+
+func broadcastContainerInstance(dst map[chan agent.ContainerInstance]struct{}, containerInstance agent.ContainerInstance) {
+	for c := range dst {
+		select {
+		case c <- containerInstance:
+		default:
 		}
-		mux.RUnlock()
 	}
 }
 
-func (c *mockAgent) getContainerInstances() agent.ContainerInstances {
+func (c *mockAgent) getContainerInstances() []agent.ContainerInstance {
 	defer atomic.AddInt32(&c.getContainerCount, 1)
+
 	c.RLock()
 	defer c.RUnlock()
+
 	containerInstances := make([]agent.ContainerInstance, 0, len(c.instances))
 	for _, containerInstance := range c.instances {
 		containerInstances = append(containerInstances, containerInstance)
@@ -118,10 +125,30 @@ func (c *mockAgent) getContainerInstances() agent.ContainerInstances {
 
 func (c *mockAgent) getContainers(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.getContainersCount, 1)
+
 	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-		c.getContainerEvents(w, r, p)
+		eventsource.Handler(func(lastID string, enc *eventsource.Encoder, stop <-chan bool) {
+			changec := make(chan agent.ContainerInstance)
+			c.notify(changec)
+			defer c.stop(changec)
+
+			buf, _ := json.Marshal(c.getContainerInstances())
+			enc.Encode(eventsource.Event{Data: buf})
+
+			for {
+				select {
+				case <-stop:
+					log.Printf("mockAgent getContainerEvents: HTTP request closed")
+					return
+				case containerInstance := <-changec:
+					buf, _ = json.Marshal([]agent.ContainerInstance{containerInstance})
+					enc.Encode(eventsource.Event{Data: buf})
+				}
+			}
+		}).ServeHTTP(w, r)
 		return
 	}
+
 	json.NewEncoder(w).Encode(c.getContainerInstances())
 }
 
@@ -129,63 +156,39 @@ func (c *mockAgent) getContainerEvents(w http.ResponseWriter, r *http.Request, p
 	log.Printf("mockAgent getContainerEvents: stream started")
 	defer log.Printf("mockAgent getContainerEvents: stream stopped")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		panic("ResponseWriter not Flusher")
-	}
-
-	if err := mockWriteContainerStreamEvent(w, agent.ContainerInstancesEventName, c.getContainerInstances()); err != nil {
-		log.Printf("mockAgent getContainerEvents: encountered error when writing first event: %s", err)
-		return
-	}
-	flusher.Flush()
-
 	closeNotifier, ok := w.(http.CloseNotifier)
 	if !ok {
 		panic("ResponseWriter not CloseNotifier")
 	}
-	notifyClose := closeNotifier.CloseNotify()
 
-	changes := make(chan map[string]agent.ContainerInstance)
-	func() {
-		c.Lock()
-		defer c.Unlock()
-		c.changesOut[r.RemoteAddr] = changes
-	}()
-	defer func() {
-		c.Lock()
-		defer c.Unlock()
-		delete(c.changesOut, r.RemoteAddr)
-	}()
+	var (
+		enc     = eventsource.NewEncoder(w)
+		closec  = closeNotifier.CloseNotify()
+		changec = make(chan agent.ContainerInstance)
+	)
+	c.notify(changec)
+	defer c.stop(changec)
+
+	buf, err := json.Marshal(c.getContainerInstances())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	w.Header().Add("Content-Type", "text/event-stream")
+
+	enc.Encode(eventsource.Event{Data: buf})
 
 	for {
 		select {
-		case change := <-changes:
-			for _, containerInstance := range change {
-				if err := mockWriteContainerStreamEvent(w, agent.ContainerInstanceEventName, containerInstance); err != nil {
-					log.Printf("mockAgent getContainerEvents: encountered error when writing event: %s", err)
-					return
-				}
-				flusher.Flush()
-			}
-		case <-notifyClose:
-			log.Printf("mockAgent getContainerEvents: HTTP request was closed")
+		case containerInstance := <-changec:
+			buf, _ := json.Marshal([]agent.ContainerInstance{containerInstance})
+			enc.Encode(eventsource.Event{Data: buf})
+		case <-closec:
+			log.Printf("mockAgent getContainerEvents: HTTP request closed")
 			return
 		}
 	}
-}
-
-func mockWriteContainerStreamEvent(w io.Writer, eventName string, v interface{}) error {
-	if _, err := fmt.Fprintf(w, "%s\n", eventName); err != nil {
-		return err
-	}
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "\n"); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -218,21 +221,23 @@ func (c *mockAgent) putContainer(w http.ResponseWriter, r *http.Request, p httpr
 		c.Lock()
 		defer c.Unlock()
 		c.instances[id] = instance
+		broadcastContainerInstance(c.subscribers, instance)
 	}()
-	c.changesIn <- map[string]agent.ContainerInstance{id: instance}
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func (c *mockAgent) getContainer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.getContainerCount, 1)
+
 	id := p.ByName("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q required", "id"))
 		return
 	}
+
 	c.RLock()
 	defer c.RUnlock()
+
 	containerInstance, ok := c.instances[id]
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("%q not present", id))
@@ -248,19 +253,23 @@ func (c *mockAgent) deleteContainer(w http.ResponseWriter, r *http.Request, p ht
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q required", "id"))
 		return
 	}
+
 	c.Lock()
 	defer c.Unlock()
+
 	containerInstance, ok := c.instances[id]
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("%q not present", id))
 		return
 	}
+
 	switch containerInstance.Status {
 	case agent.ContainerStatusFailed, agent.ContainerStatusFinished:
 		delete(c.instances, id)
 		containerInstance.Status = agent.ContainerStatusDeleted
-		go func() { c.changesIn <- map[string]agent.ContainerInstance{id: containerInstance} }()
+		broadcastContainerInstance(c.subscribers, containerInstance)
 		w.WriteHeader(http.StatusOK)
+
 	default:
 		writeError(w, http.StatusNotFound, fmt.Errorf("%q not in a finished state, currently %s", id, containerInstance.Status))
 		return
@@ -281,23 +290,27 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 	case "stop":
 		c.Lock()
 		defer c.Unlock()
+
 		containerInstance, ok := c.instances[id]
 		if !ok {
 			writeError(w, http.StatusNotFound, fmt.Errorf("%q unknown; can't stop", id))
 			return
 		}
+
 		if containerInstance.Status != agent.ContainerStatusRunning {
 			writeError(w, http.StatusNotAcceptable, fmt.Errorf("%q not running (%s); can't stop", id, containerInstance.Status))
 			return
 		}
 		containerInstance.Status = agent.ContainerStatusFinished
 		w.WriteHeader(http.StatusAccepted) // "[Stop] returns immediately with 202 status."
+
 		go func() {
 			c.Lock()
 			defer c.Unlock()
 			c.instances[id] = containerInstance
-			c.changesIn <- map[string]agent.ContainerInstance{id: containerInstance}
+			broadcastContainerInstance(c.subscribers, containerInstance)
 		}()
+		return
 
 	case "restart":
 		writeError(w, http.StatusNotImplemented, fmt.Errorf("restart not yet implemented"))
@@ -308,7 +321,7 @@ func (c *mockAgent) postContainer(w http.ResponseWriter, r *http.Request, p http
 
 func (c *mockAgent) getContainerLog(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	defer atomic.AddInt32(&c.getContainerLogCount, 1)
-	writeError(w, http.StatusNotImplemented, fmt.Errorf("not yet implemented"))
+	writeError(w, http.StatusNotImplemented, fmt.Errorf("log not yet implemented"))
 }
 
 func (c *mockAgent) getResources(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
