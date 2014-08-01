@@ -27,6 +27,8 @@ type containerLog struct {
 	quitc   chan struct{}
 }
 
+// NewContainerLog allocates and initializes a ring-buffered log structure for
+// a single active container.
 func NewContainerLog(bufferSize int) *containerLog {
 	cl := &containerLog{
 		entries:       NewRingBuffer(bufferSize),
