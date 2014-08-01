@@ -16,9 +16,9 @@ import (
 
 type stateMachine struct {
 	agent.Agent
-	containerInstancesRequests chan chan map[string]agent.ContainerInstance
-	dirtyRequests              chan chan bool
-	quit                       chan chan struct{}
+	stateRequests chan chan map[string]agent.ContainerInstance
+	dirtyRequests chan chan bool
+	quit          chan chan struct{}
 }
 
 func newStateMachine(endpoint string) (*stateMachine, error) {
@@ -26,17 +26,17 @@ func newStateMachine(endpoint string) (*stateMachine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("when building agent proxy: %s", err)
 	}
-	containerEvents, stopper, err := proxy.Events()
+	statec, stopper, err := proxy.Events()
 	if err != nil {
 		return nil, fmt.Errorf("when getting agent event stream: %s", err)
 	}
 	s := &stateMachine{
-		Agent: proxy,
-		containerInstancesRequests: make(chan chan map[string]agent.ContainerInstance),
-		dirtyRequests:              make(chan chan bool),
-		quit:                       make(chan chan struct{}),
+		Agent:         proxy,
+		stateRequests: make(chan chan map[string]agent.ContainerInstance),
+		dirtyRequests: make(chan chan bool),
+		quit:          make(chan chan struct{}),
 	}
-	go s.loop(proxy.URL.String(), containerEvents, stopper)
+	go s.loop(proxy.URL.String(), statec, stopper)
 	return s, nil
 }
 
@@ -52,7 +52,7 @@ func (s *stateMachine) proxy() agent.Agent {
 
 func (s *stateMachine) containerInstances() map[string]agent.ContainerInstance {
 	c := make(chan map[string]agent.ContainerInstance)
-	s.containerInstancesRequests <- c
+	s.stateRequests <- c
 	return <-c
 }
 
@@ -64,12 +64,10 @@ func (s *stateMachine) stop() {
 
 func (s *stateMachine) loop(
 	endpoint string,
-	containerEvents <-chan agent.ContainerEvent,
-	eventStopper agent.Stopper,
+	statec <-chan []agent.ContainerInstance,
+	stopper agent.Stopper,
 ) {
-	defer func() {
-		eventStopper.Stop()
-	}()
+	defer stopper.Stop()
 
 	m := map[string]agent.ContainerInstance{} // ID: instance
 	updateWith := func(containerInstance agent.ContainerInstance) {
@@ -93,42 +91,27 @@ func (s *stateMachine) loop(
 
 	for {
 		select {
-		case containerEvent, ok := <-containerEvents:
-			incContainerEventsReceived(1)
+		case containerInstances, ok := <-statec:
 			if !ok {
 				log.Printf("state machine: %s: container events chan closed", endpoint)
 				log.Printf("state machine: %s: TODO: re-establish connection", endpoint)
 				// Note to self: use streadway's channel-of-channels idiom to
 				// accomplish connection maintenance.
-				containerEvents = nil // TODO re-establish connection, instead of this
-				dirty = true          // TODO and some way to reset that
+				statec = nil // TODO re-establish connection, instead of this
+				dirty = true // TODO and some way to reset that
 				continue
 			}
-
-			switch containerEvent.EventName() {
-			case agent.ContainerInstancesEventName:
-				containerInstances, ok := containerEvent.(agent.ContainerInstances)
-				if !ok {
-					panic("impossible")
-				}
-				log.Printf("state machine: %s: initial 'containers' reveals %d running task instance(s)", endpoint, len(containerInstances))
-				for _, containerInstance := range containerInstances {
-					updateWith(containerInstance)
-				}
-				dirty = false
-
-			case agent.ContainerInstanceEventName:
-				containerInstance, ok := containerEvent.(agent.ContainerInstance)
-				if !ok {
-					panic("impossible")
-				}
+			incContainerEventsReceived(1)
+			//log.Printf("state machine: %s: state update: %d container instance(s)", endpoint, len(containerInstances))
+			for _, containerInstance := range containerInstances {
 				updateWith(containerInstance)
 			}
+			dirty = false
 
 		case c := <-s.dirtyRequests:
 			c <- dirty
 
-		case c := <-s.containerInstancesRequests:
+		case c := <-s.stateRequests:
 			c <- m
 
 		case q := <-s.quit:

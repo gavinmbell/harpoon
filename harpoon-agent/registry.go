@@ -81,11 +81,11 @@ func (r *registry) Len() int {
 	return len(r.m)
 }
 
-func (r *registry) Instances() agent.ContainerInstances {
+func (r *registry) Instances() []agent.ContainerInstance {
 	r.Lock()
 	defer r.Unlock()
 
-	list := make(agent.ContainerInstances, 0, len(r.m))
+	list := make([]agent.ContainerInstance, 0, len(r.m))
 
 	for _, container := range r.m {
 		list = append(list, container.Instance())

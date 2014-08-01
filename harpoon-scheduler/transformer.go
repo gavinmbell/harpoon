@@ -29,6 +29,7 @@ func newTransformer(
 		stateMachine, err := newStateMachine(endpoint)
 		if err != nil {
 			log.Printf("transformer: state machine for %s: %s", endpoint, err)
+			continue
 		}
 		stateMachines[endpoint] = stateMachine
 	}

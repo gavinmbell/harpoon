@@ -68,23 +68,36 @@ Returns an array of [ContainerInstance][containerinstance] objects,
 representing the current state of the agent.
 
 If the request header `Accept: text/event-stream` is provided, the agent will
-instead yield a stream of container events, as `\n`-separated JSON objects
-with the schema `{"event": "<type>", "self": <object>}`. The first event is
-type `containers`, reflecting the current state of the agent. All subsequent
-events are type `container`, sent whenever a container instance changes state.
+instead yield a stream of container events, as [server-sent events][sse]. We
+use eventsource events because there's a proper spec, it's supported by
+browsers, and it provides a nice upgrade and enhancement path if we want to
+supply additional fields or metadata.
 
-When                  | Event type   | Self object
-----------------------|--------------|-------------------------------------------
-first event           | `containers` | array of [ContainerInstance][containerinstance] objects
-all subsequent events | `container`  | individual [ContainerInstance][containerinstance] object
+[sse]: http://www.w3.org/TR/eventsource
+
+Events are always JSON arrays containing ContainerInstances. The first event
+on every request contains every ContainerInstance in the agent. Subsequent
+events contain ContainerInstances for any container that changes state.
+
+```
+data: [...]
+
+data: [...]
+```
 
 ## GET /containers/{id}/log?history=10
 
 Returns history log lines from the container.
 
 If the request header `Accept: text/event-stream` is provided, the agent will
-instead yield a stream of `\n`-separated log lines from the container.
+instead yield a stream of [eventstream data events][sse] representing the log
+lines for that container.
 
+```
+data: Log line one
+
+data: Log line two
+```
 
 ## GET /resources
 
