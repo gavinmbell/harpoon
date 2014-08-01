@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/soundcloud/harpoon/harpoon-agent/lib"
+	"github.com/bmizerany/pat"
 
 	"github.com/bernerdschaefer/eventsource"
-	"github.com/bmizerany/pat"
+	"github.com/soundcloud/harpoon/harpoon-agent/lib"
 )
 
 type api struct {
@@ -39,6 +39,8 @@ func newAPI(r *registry) *api {
 	mux.Post("/containers/:id/heartbeat", http.HandlerFunc(api.handleHeartbeat))
 	mux.Post("/containers/:id/start", http.HandlerFunc(api.handleStart))
 	mux.Post("/containers/:id/stop", http.HandlerFunc(api.handleStop))
+	// TODO(jmy): Uncomment this when we've decided on the interface's final from.
+	// mux.Get("/containers/:id/log", http.HandlerFunc(api.handleLog))
 	mux.Get("/containers", http.HandlerFunc(api.handleList))
 
 	mux.Get("/resources", http.HandlerFunc(api.handleResources))
@@ -255,6 +257,47 @@ func isStreamAccept(accept string) bool {
 	}
 
 	return false
+}
+
+func (a *api) handleLog(w http.ResponseWriter, r *http.Request) {
+	var (
+		id         = r.URL.Query().Get(":id")
+		rawHistory = r.URL.Query().Get("history")
+	)
+
+	if rawHistory == "" {
+		rawHistory = "10"
+	}
+
+	container, ok := a.registry.Get(id)
+	if !ok {
+		http.Error(w, "", http.StatusNotFound)
+		return
+	}
+
+	history, err := strconv.Atoi(rawHistory)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if isStreamAccept(r.Header.Get("Accept")) {
+		logLines := make(chan string, 2000)
+		container.logs.Notify(logLines)
+		defer container.logs.Stop(logLines)
+		for line := range logLines {
+			if _, err := w.Write([]byte(line)); err != nil {
+				return
+			}
+		}
+		return
+	}
+
+	for _, line := range container.logs.Last(history) {
+		if _, err := w.Write([]byte(line)); err != nil {
+			return
+		}
+	}
 }
 
 func (a *api) handleResources(w http.ResponseWriter, r *http.Request) {
