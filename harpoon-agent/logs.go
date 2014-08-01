@@ -20,10 +20,10 @@ type containerLog struct {
 	entries       *RingBuffer
 	notifications map[chan string]struct{}
 
-	addc    chan logAdd
+	addc    chan string
 	lastc   chan logLast
-	notifyc chan logNotify
-	stopc   chan logStop
+	notifyc chan chan string
+	stopc   chan chan string
 	quitc   chan struct{}
 }
 
@@ -32,31 +32,19 @@ func NewContainerLog(bufferSize int) *containerLog {
 		entries:       NewRingBuffer(bufferSize),
 		notifications: make(map[chan string]struct{}),
 
-		addc:    make(chan logAdd),
+		addc:    make(chan string),
 		lastc:   make(chan logLast),
-		notifyc: make(chan logNotify),
-		stopc:   make(chan logStop),
+		notifyc: make(chan chan string),
+		stopc:   make(chan chan string),
 		quitc:   make(chan struct{}),
 	}
 	go cl.loop()
 	return cl
 }
 
-type logAdd struct {
-	logLine string // supplied by caller
-}
-
 type logLast struct {
 	count int           // supplied by caller
 	last  chan []string // passes result to caller
-}
-
-type logNotify struct {
-	logSink chan string // supplied by caller
-}
-
-type logStop struct {
-	logSink chan string // supplied by caller
 }
 
 // AddLogLine feeds a log entry into a log buffer and notifies all listeners.
@@ -71,7 +59,7 @@ type logStop struct {
 //  If the number of dropped notifications goes up then a listener is not consuming
 //  notifications fast enough.  Look for a stalled listener.
 func (cl *containerLog) AddLogLine(logLine string) {
-	cl.addc <- logAdd{logLine: logLine}
+	cl.addc <- logLine
 }
 
 // Last retrieves the n last log lines from containerID, returning them in
@@ -87,12 +75,12 @@ func (cl *containerLog) Last(n int) []string {
 // in the notifications set.  A logSink does not receive messages while it is blocked.
 // All of those messages are lost like tears in the rain.
 func (cl *containerLog) Notify(logSink chan string) {
-	cl.notifyc <- logNotify{logSink: logSink}
+	cl.notifyc <- logSink
 }
 
 // Stop removes the logSink from the notifications set.
 func (cl *containerLog) Stop(logSink chan string) {
-	cl.stopc <- logStop{logSink: logSink}
+	cl.stopc <- logSink
 }
 
 // Exit causes terminates the loop() cleanly
@@ -104,14 +92,14 @@ func (cl *containerLog) Exit() {
 func (cl *containerLog) loop() {
 	for {
 		select {
-		case msg := <-cl.addc:
-			cl.insert(msg.logLine)
+		case logLine := <-cl.addc:
+			cl.insert(logLine)
 		case msg := <-cl.lastc:
 			msg.last <- cl.entries.Last(msg.count)
-		case msg := <-cl.notifyc:
-			cl.addNotifier(msg.logSink)
-		case msg := <-cl.stopc:
-			cl.removeNotifier(msg.logSink)
+		case logSink := <-cl.notifyc:
+			cl.addNotifier(logSink)
+		case logSink := <-cl.stopc:
+			cl.removeNotifier(logSink)
 		case <-cl.quitc:
 			cl.removeNotifiers()
 			return
@@ -140,10 +128,6 @@ func (cl *containerLog) addNotifier(logSink chan string) {
 
 // removeLister removes logSink from the notification list
 func (cl *containerLog) removeNotifier(logSink chan string) {
-	_, ok := cl.notifications[logSink]
-	if !ok {
-		return
-	}
 	close(logSink)
 	delete(cl.notifications, logSink)
 }

@@ -39,7 +39,7 @@ func newAPI(r *registry) *api {
 	mux.Post("/containers/:id/start", http.HandlerFunc(api.handleStart))
 	mux.Post("/containers/:id/stop", http.HandlerFunc(api.handleStop))
 	// TODO(jmy): Uncomment this when we've decided on the interface's final from.
-	// muxGet("/containers/:id/log", http.HandlerFunc(api.handleLog))
+	// mux.Get("/containers/:id/log", http.HandlerFunc(api.handleLog))
 	mux.Get("/containers", http.HandlerFunc(api.handleList))
 
 	mux.Get("/resources", http.HandlerFunc(api.handleResources))
